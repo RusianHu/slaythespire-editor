@@ -10,7 +10,7 @@
 - `current_run` 文件探测与辅助验证
 - 从 `SlayTheSpire2.pck` 提取本地化文本索引，用于中文名预览与搜索
 
-<img width="1086" height="713" alt="image" src="https://github.com/user-attachments/assets/dd272b04-68cd-4555-af96-9df41de39757" />
+<img width="1201" height="889" alt="image" src="https://github.com/user-attachments/assets/4be33edb-61a3-4b3f-8589-136022e40495" />
 
 ## 安装
 
