@@ -22,6 +22,11 @@ from .structured import (
     build_localized_preview_text,
     search_localized_ids,
     clear_localization_runtime_cache,
+    build_run_item_id_lines,
+    build_run_items_preview_text,
+    format_run_item_label,
+    normalize_run_item_list,
+    _rebuild_run_item_list,
 )
 from .localization import set_runtime_pck_path_override
 from .path_manager import (
@@ -69,6 +74,11 @@ class StS2MainFrame(wx.Frame):
         self.file_infos: list[SaveFileInfo] = []
         self.current_info: SaveFileInfo | None = None
         self.current_data: Any = None
+        self.run_deck_items: list[dict[str, Any]] = []
+        self.run_relic_items: list[dict[str, Any]] = []
+        self.run_potion_items: list[dict[str, Any]] = []
+        self.run_deck_enchantment_candidate_ids: list[str] = []
+        self._suppress_run_item_text_sync = False
         self._layout_refresh_pending = False
         self.path_status_hint = ""
 
@@ -382,7 +392,7 @@ class StS2MainFrame(wx.Frame):
         player_desc = wx.StaticText(
             structured_edit_panel,
             wx.ID_ANY,
-            "当前支持战局基础字段，以及玩家卡组/遗物/药水的第一版结构化编辑。每行一个内部 ID。"
+            "当前支持战局基础字段，以及玩家卡组/遗物/药水的结构化编辑。卡组会保留升级、附魔等元数据；多行文本框仍显示内部 ID 投影。"
         )
         player_box.Add(player_desc, 0, wx.ALL, 8)
 
@@ -514,6 +524,72 @@ class StS2MainFrame(wx.Frame):
         player_box.Add(_build_candidate_row("遗物候选：", "relic"), 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
         player_box.Add(_build_candidate_row("药水候选：", "potion"), 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
 
+        deck_meta_box = wx.StaticBoxSizer(wx.VERTICAL, structured_edit_panel, "卡组附加属性编辑")
+
+        deck_meta_desc = wx.StaticText(
+            structured_edit_panel,
+            wx.ID_ANY,
+            "选中卡组当前列表中的某张卡后，可直接调整升级等级与附魔；这些信息会随卡牌一起移动和保存。"
+        )
+        deck_meta_box.Add(deck_meta_desc, 0, wx.LEFT | wx.RIGHT | wx.TOP | wx.BOTTOM, 6)
+
+        deck_meta_grid = wx.FlexGridSizer(0, 2, 8, 8)
+        deck_meta_grid.AddGrowableCol(1, 1)
+
+        deck_meta_grid.Add(wx.StaticText(structured_edit_panel, wx.ID_ANY, "升级等级："), 0, wx.ALIGN_CENTER_VERTICAL)
+        self.run_deck_upgrade_level_ctrl = wx.SpinCtrl(
+            structured_edit_panel,
+            wx.ID_ANY,
+            min=0,
+            max=99,
+            initial=0,
+        )
+        deck_meta_grid.Add(self.run_deck_upgrade_level_ctrl, 0, wx.EXPAND)
+
+        deck_meta_grid.Add(wx.StaticText(structured_edit_panel, wx.ID_ANY, "附魔搜索："), 0, wx.ALIGN_CENTER_VERTICAL)
+        self.run_deck_enchantment_search_ctrl = wx.TextCtrl(structured_edit_panel, wx.ID_ANY, "")
+        deck_meta_grid.Add(self.run_deck_enchantment_search_ctrl, 1, wx.EXPAND)
+
+        deck_meta_grid.Add(wx.StaticText(structured_edit_panel, wx.ID_ANY, "附魔候选："), 0, wx.ALIGN_CENTER_VERTICAL)
+        self.run_deck_enchantment_choice = wx.Choice(structured_edit_panel, wx.ID_ANY)
+        deck_meta_grid.Add(self.run_deck_enchantment_choice, 1, wx.EXPAND)
+
+        deck_meta_grid.Add(wx.StaticText(structured_edit_panel, wx.ID_ANY, "附魔层数："), 0, wx.ALIGN_CENTER_VERTICAL)
+        self.run_deck_enchantment_amount_ctrl = wx.SpinCtrl(
+            structured_edit_panel,
+            wx.ID_ANY,
+            min=1,
+            max=99,
+            initial=1,
+        )
+        deck_meta_grid.Add(self.run_deck_enchantment_amount_ctrl, 0, wx.EXPAND)
+
+        deck_meta_box.Add(deck_meta_grid, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 6)
+
+        deck_meta_actions = wx.BoxSizer(wx.HORIZONTAL)
+        self.run_deck_apply_upgrade_button = wx.Button(structured_edit_panel, wx.ID_ANY, "应用升级")
+        self.run_deck_clear_upgrade_button = wx.Button(structured_edit_panel, wx.ID_ANY, "清除升级")
+        self.run_deck_apply_enchantment_button = wx.Button(structured_edit_panel, wx.ID_ANY, "应用附魔")
+        self.run_deck_clear_enchantment_button = wx.Button(structured_edit_panel, wx.ID_ANY, "清除附魔")
+
+        deck_meta_actions.Add(self.run_deck_apply_upgrade_button, 0, wx.RIGHT, 8)
+        deck_meta_actions.Add(self.run_deck_clear_upgrade_button, 0, wx.RIGHT, 8)
+        deck_meta_actions.Add(self.run_deck_apply_enchantment_button, 0, wx.RIGHT, 8)
+        deck_meta_actions.Add(self.run_deck_clear_enchantment_button, 0)
+        deck_meta_box.Add(deck_meta_actions, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 6)
+
+        self.run_deck_selected_meta_preview_ctrl = wx.TextCtrl(
+            structured_edit_panel,
+            wx.ID_ANY,
+            "",
+            style=wx.TE_MULTILINE | wx.TE_READONLY | wx.HSCROLL | wx.TE_RICH2,
+        )
+        self.run_deck_selected_meta_preview_ctrl.SetFont(mono_font)
+        self.run_deck_selected_meta_preview_ctrl.SetMinSize(wx.Size(-1, 72))
+        deck_meta_box.Add(self.run_deck_selected_meta_preview_ctrl, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 6)
+
+        player_box.Add(deck_meta_box, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
+
         current_items_desc = wx.StaticText(
             structured_edit_panel,
             wx.ID_ANY,
@@ -526,6 +602,10 @@ class StS2MainFrame(wx.Frame):
 
             listbox = wx.ListBox(structured_edit_panel, wx.ID_ANY, style=wx.LB_SINGLE)
             listbox.SetMinSize(wx.Size(-1, 120))
+            listbox.Bind(
+                wx.EVT_LISTBOX,
+                lambda event, current_kind=item_kind: self.on_select_run_item(event, current_kind)
+            )
             box.Add(listbox, 0, wx.EXPAND | wx.ALL, 6)
 
             actions = wx.BoxSizer(wx.HORIZONTAL)
@@ -619,6 +699,12 @@ class StS2MainFrame(wx.Frame):
         self.run_localized_preview_ctrl.SetMinSize(wx.Size(-1, 180))
         player_box.Add(self.run_localized_preview_ctrl, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
         
+        self.run_deck_enchantment_search_ctrl.Bind(wx.EVT_TEXT, self.on_run_deck_enchantment_search_changed)
+        self.run_deck_apply_upgrade_button.Bind(wx.EVT_BUTTON, self.on_apply_selected_deck_upgrade)
+        self.run_deck_clear_upgrade_button.Bind(wx.EVT_BUTTON, self.on_clear_selected_deck_upgrade)
+        self.run_deck_apply_enchantment_button.Bind(wx.EVT_BUTTON, self.on_apply_selected_deck_enchantment)
+        self.run_deck_clear_enchantment_button.Bind(wx.EVT_BUTTON, self.on_clear_selected_deck_enchantment)
+
         structured_edit_sizer.Add(player_box, 0, wx.EXPAND | wx.ALL, 10)
 
         prefs_box = wx.StaticBoxSizer(wx.VERTICAL, structured_edit_panel, "偏好设置编辑")
@@ -1013,23 +1099,29 @@ class StS2MainFrame(wx.Frame):
 
     def _set_run_player_editor_enabled(self, enabled: bool) -> None:
         """Enable or disable all player editor controls."""
-        if hasattr(self, 'run_player_choice'):
-            self.run_player_choice.Enable(enabled)
-        if hasattr(self, 'run_character_ctrl'):
-            self.run_character_ctrl.Enable(enabled)
-        if hasattr(self, 'run_max_potion_slots_ctrl'):
-            self.run_max_potion_slots_ctrl.Enable(enabled)
-        if hasattr(self, 'run_deck_ids_ctrl'):
-            self.run_deck_ids_ctrl.Enable(enabled)
-        if hasattr(self, 'run_relic_ids_ctrl'):
-            self.run_relic_ids_ctrl.Enable(enabled)
-        if hasattr(self, 'run_potion_ids_ctrl'):
-            self.run_potion_ids_ctrl.Enable(enabled)
-        if hasattr(self, 'run_localized_search_ctrl'):
-            self.run_localized_search_ctrl.Enable(enabled)
-        if hasattr(self, 'run_localized_filter_choice'):
-            self.run_localized_filter_choice.Enable(enabled)
-        
+        for attr_name in (
+            "run_player_choice",
+            "run_character_ctrl",
+            "run_max_potion_slots_ctrl",
+            "run_deck_ids_ctrl",
+            "run_relic_ids_ctrl",
+            "run_potion_ids_ctrl",
+            "run_localized_search_ctrl",
+            "run_localized_filter_choice",
+            "run_deck_upgrade_level_ctrl",
+            "run_deck_enchantment_search_ctrl",
+            "run_deck_enchantment_choice",
+            "run_deck_enchantment_amount_ctrl",
+            "run_deck_apply_upgrade_button",
+            "run_deck_clear_upgrade_button",
+            "run_deck_apply_enchantment_button",
+            "run_deck_clear_enchantment_button",
+            "run_deck_selected_meta_preview_ctrl",
+        ):
+            ctrl = getattr(self, attr_name, None)
+            if ctrl is not None:
+                ctrl.Enable(enabled)
+
         # Enable/disable candidate controls
         for item_kind in ("deck", "relic", "potion"):
             config = self._get_run_candidate_config(item_kind)
@@ -1049,6 +1141,9 @@ class StS2MainFrame(wx.Frame):
                 ctrl = getattr(self, attr_name, None)
                 if ctrl is not None:
                     ctrl.Enable(enabled)
+        
+        self._update_selected_deck_meta_controls()
+
 
     def _set_progress_editor_enabled(self, enabled: bool) -> None:
         """Enable or disable all progress editor controls."""
@@ -1084,6 +1179,11 @@ class StS2MainFrame(wx.Frame):
 
     def _clear_run_player_editor(self) -> None:
         """Clear all player editor controls."""
+        self.run_deck_items = []
+        self.run_relic_items = []
+        self.run_potion_items = []
+        self.run_deck_enchantment_candidate_ids = []
+
         if hasattr(self, 'run_player_choice'):
             self.run_player_choice.Set([])
         if hasattr(self, 'run_character_ctrl'):
@@ -1091,11 +1191,11 @@ class StS2MainFrame(wx.Frame):
         if hasattr(self, 'run_max_potion_slots_ctrl'):
             self.run_max_potion_slots_ctrl.SetValue(0)
         if hasattr(self, 'run_deck_ids_ctrl'):
-            self.run_deck_ids_ctrl.SetValue("")
+            self.run_deck_ids_ctrl.ChangeValue("")
         if hasattr(self, 'run_relic_ids_ctrl'):
-            self.run_relic_ids_ctrl.SetValue("")
+            self.run_relic_ids_ctrl.ChangeValue("")
         if hasattr(self, 'run_potion_ids_ctrl'):
-            self.run_potion_ids_ctrl.SetValue("")
+            self.run_potion_ids_ctrl.ChangeValue("")
         if hasattr(self, 'run_character_preview_ctrl'):
             self.run_character_preview_ctrl.SetValue("")
         if hasattr(self, 'run_localized_preview_ctrl'):
@@ -1104,7 +1204,25 @@ class StS2MainFrame(wx.Frame):
             self.run_localized_search_ctrl.SetValue("")
         if hasattr(self, 'run_localized_filter_choice'):
             self.run_localized_filter_choice.SetSelection(0)
-        
+        if hasattr(self, 'run_deck_upgrade_level_ctrl'):
+            self.run_deck_upgrade_level_ctrl.SetValue(0)
+        if hasattr(self, 'run_deck_enchantment_search_ctrl'):
+            self.run_deck_enchantment_search_ctrl.ChangeValue("")
+        if hasattr(self, 'run_deck_enchantment_choice'):
+            self.run_deck_enchantment_choice.Set([])
+        if hasattr(self, 'run_deck_enchantment_amount_ctrl'):
+            self.run_deck_enchantment_amount_ctrl.SetValue(1)
+        if hasattr(self, 'run_deck_selected_meta_preview_ctrl'):
+            self.run_deck_selected_meta_preview_ctrl.SetValue("")
+        if hasattr(self, 'run_deck_apply_upgrade_button'):
+            self.run_deck_apply_upgrade_button.Enable(False)
+        if hasattr(self, 'run_deck_clear_upgrade_button'):
+            self.run_deck_clear_upgrade_button.Enable(False)
+        if hasattr(self, 'run_deck_apply_enchantment_button'):
+            self.run_deck_apply_enchantment_button.Enable(False)
+        if hasattr(self, 'run_deck_clear_enchantment_button'):
+            self.run_deck_clear_enchantment_button.Enable(False)
+
         # Clear candidate controls
         for item_kind in ("deck", "relic", "potion"):
             config = self._get_run_candidate_config(item_kind)
@@ -1121,6 +1239,7 @@ class StS2MainFrame(wx.Frame):
             items_listbox = getattr(self, f"run_{item_kind}_items_listbox", None)
             if items_listbox is not None:
                 items_listbox.Set([])
+
 
     def _clear_progress_editor(self) -> None:
         """Clear all progress editor controls."""
@@ -1156,36 +1275,243 @@ class StS2MainFrame(wx.Frame):
         if hasattr(self, 'prefs_upload_data_ctrl'):
             self.prefs_upload_data_ctrl.SetValue(False)
 
+    @staticmethod
+    def _normalize_run_item_kind(item_kind: str) -> str:
+        mapping = {
+            "deck": "deck",
+            "relic": "relic",
+            "relics": "relic",
+            "potion": "potion",
+            "potions": "potion",
+        }
+        return mapping.get(item_kind, item_kind)
+
+    @staticmethod
+    def _structured_item_kind(item_kind: str) -> str:
+        mapping = {
+            "deck": "deck",
+            "relic": "relics",
+            "potion": "potions",
+        }
+        normalized_kind = StS2MainFrame._normalize_run_item_kind(item_kind)
+        return mapping.get(normalized_kind, normalized_kind)
+
+    def _get_run_items_attr_name(self, item_kind: str) -> str | None:
+        normalized_kind = self._normalize_run_item_kind(item_kind)
+        mapping = {
+            "deck": "run_deck_items",
+            "relic": "run_relic_items",
+            "potion": "run_potion_items",
+        }
+        return mapping.get(normalized_kind)
+
+    def _get_run_items(self, item_kind: str) -> list[dict[str, Any]]:
+        attr_name = self._get_run_items_attr_name(item_kind)
+        if not attr_name:
+            return []
+        value = getattr(self, attr_name, [])
+        return value if isinstance(value, list) else []
+
+    def _set_run_items(self, item_kind: str, items: list[Any]) -> None:
+        normalized_kind = self._normalize_run_item_kind(item_kind)
+        structured_kind = self._structured_item_kind(normalized_kind)
+        attr_name = self._get_run_items_attr_name(normalized_kind)
+        if not attr_name:
+            return
+        normalized_items = normalize_run_item_list(list(items), item_kind=structured_kind)
+        setattr(self, attr_name, normalized_items)
+        self._sync_run_item_text_ctrl_from_items(normalized_kind)
+
+    def _sync_run_item_text_ctrl_from_items(self, item_kind: str) -> None:
+        normalized_kind = self._normalize_run_item_kind(item_kind)
+        config = self._get_run_candidate_config(normalized_kind)
+        if not config:
+            return
+        target_ctrl = getattr(self, config["target_ctrl_attr"], None)
+        if target_ctrl is None:
+            return
+        item_lines = build_run_item_id_lines(self._get_run_items(normalized_kind))
+        self._suppress_run_item_text_sync = True
+        try:
+            target_ctrl.ChangeValue("\n".join(item_lines))
+        finally:
+            self._suppress_run_item_text_sync = False
+
+    def _sync_run_items_from_editor_text(self, item_kind: str) -> None:
+        if self._suppress_run_item_text_sync:
+            return
+
+        normalized_kind = self._normalize_run_item_kind(item_kind)
+        config = self._get_run_candidate_config(normalized_kind)
+        if not config:
+            return
+        target_ctrl = getattr(self, config["target_ctrl_attr"], None)
+        if target_ctrl is None:
+            return
+
+        new_ids = [line.strip() for line in target_ctrl.GetValue().splitlines() if line.strip()]
+        current_items = self._get_run_items(normalized_kind)
+        structured_kind = self._structured_item_kind(normalized_kind)
+        normalized_items = normalize_run_item_list(list(current_items), item_kind=structured_kind)
+
+        buckets: dict[str, list[dict[str, Any]]] = {}
+        for item in normalized_items:
+            item_id = str(item.get("id", ""))
+            buckets.setdefault(item_id, []).append(item)
+
+        rebuilt: list[Any] = []
+        for item_id in new_ids:
+            candidates = buckets.get(item_id, [])
+            if candidates:
+                rebuilt.append(candidates.pop(0))
+            else:
+                rebuilt.append({"id": item_id})
+
+        setattr(self, self._get_run_items_attr_name(normalized_kind), normalize_run_item_list(rebuilt, item_kind=structured_kind))
+
+    def _sync_all_run_items_from_editor_text(self) -> None:
+        for item_kind in ("deck", "relic", "potion"):
+            self._sync_run_items_from_editor_text(item_kind)
+
+    def _update_run_deck_enchantment_choice(self) -> None:
+        if not hasattr(self, "run_deck_enchantment_choice"):
+            return
+        if not (self.current_info and self.current_info.kind in (SaveFileKind.RUN_HISTORY, SaveFileKind.CURRENT_RUN)):
+            self.run_deck_enchantment_choice.Set([])
+            self.run_deck_enchantment_candidate_ids = []
+            return
+
+        query = self.run_deck_enchantment_search_ctrl.GetValue().strip() if hasattr(self, "run_deck_enchantment_search_ctrl") else ""
+        candidate_ids = search_localized_ids(category="enchantments", query=query, limit=200)
+        self.run_deck_enchantment_candidate_ids = candidate_ids
+        labels = [format_localized_id_text(item_id, category="enchantments") for item_id in candidate_ids]
+        self.run_deck_enchantment_choice.Set(labels)
+        if candidate_ids:
+            self.run_deck_enchantment_choice.SetSelection(0)
+
+
+    def _get_selected_run_deck_enchantment_id(self) -> str | None:
+        choice_ctrl = getattr(self, "run_deck_enchantment_choice", None)
+        candidate_ids = getattr(self, "run_deck_enchantment_candidate_ids", [])
+        if choice_ctrl is None or not candidate_ids:
+            return None
+        selected_index = choice_ctrl.GetSelection()
+        if selected_index == wx.NOT_FOUND or selected_index >= len(candidate_ids):
+            return None
+        return candidate_ids[selected_index]
+
+
+    def _update_selected_deck_meta_controls(self) -> None:
+        if not hasattr(self, "run_deck_selected_meta_preview_ctrl"):
+            return
+
+        selected_index = self._get_selected_run_item_index("deck")
+        items = self._get_run_items("deck")
+        if selected_index is None or selected_index < 0 or selected_index >= len(items):
+            if hasattr(self, "run_deck_upgrade_level_ctrl"):
+                self.run_deck_upgrade_level_ctrl.SetValue(0)
+            if hasattr(self, "run_deck_enchantment_amount_ctrl"):
+                self.run_deck_enchantment_amount_ctrl.SetValue(1)
+            if hasattr(self, "run_deck_selected_meta_preview_ctrl"):
+                self.run_deck_selected_meta_preview_ctrl.SetValue("")
+            if hasattr(self, "run_deck_upgrade_level_ctrl"):
+                self.run_deck_upgrade_level_ctrl.Enable(False)
+            if hasattr(self, "run_deck_enchantment_search_ctrl"):
+                self.run_deck_enchantment_search_ctrl.Enable(False)
+            if hasattr(self, "run_deck_enchantment_choice"):
+                self.run_deck_enchantment_choice.Enable(False)
+            if hasattr(self, "run_deck_enchantment_amount_ctrl"):
+                self.run_deck_enchantment_amount_ctrl.Enable(False)
+            if hasattr(self, "run_deck_apply_upgrade_button"):
+                self.run_deck_apply_upgrade_button.Enable(False)
+            if hasattr(self, "run_deck_clear_upgrade_button"):
+                self.run_deck_clear_upgrade_button.Enable(False)
+            if hasattr(self, "run_deck_apply_enchantment_button"):
+                self.run_deck_apply_enchantment_button.Enable(False)
+            if hasattr(self, "run_deck_clear_enchantment_button"):
+                self.run_deck_clear_enchantment_button.Enable(False)
+            self._update_run_deck_enchantment_choice()
+            return
+
+        item = items[selected_index]
+        upgrade_level = item.get("current_upgrade_level") if isinstance(item.get("current_upgrade_level"), int) else 0
+        if hasattr(self, "run_deck_upgrade_level_ctrl"):
+            self.run_deck_upgrade_level_ctrl.SetValue(max(0, upgrade_level))
+
+        enchantment = item.get("enchantment") if isinstance(item.get("enchantment"), dict) else None
+        enchantment_id = str(enchantment.get("id", "")).strip() if enchantment else ""
+        enchantment_amount = enchantment.get("amount") if enchantment and isinstance(enchantment.get("amount"), int) else 1
+        if hasattr(self, "run_deck_enchantment_amount_ctrl"):
+            self.run_deck_enchantment_amount_ctrl.SetValue(max(1, enchantment_amount))
+
+        if hasattr(self, "run_deck_upgrade_level_ctrl"):
+            self.run_deck_upgrade_level_ctrl.Enable(True)
+        if hasattr(self, "run_deck_enchantment_search_ctrl"):
+            self.run_deck_enchantment_search_ctrl.Enable(True)
+        if hasattr(self, "run_deck_enchantment_choice"):
+            self.run_deck_enchantment_choice.Enable(True)
+        if hasattr(self, "run_deck_enchantment_amount_ctrl"):
+            self.run_deck_enchantment_amount_ctrl.Enable(True)
+        if hasattr(self, "run_deck_apply_upgrade_button"):
+            self.run_deck_apply_upgrade_button.Enable(True)
+        if hasattr(self, "run_deck_clear_upgrade_button"):
+            self.run_deck_clear_upgrade_button.Enable(True)
+        if hasattr(self, "run_deck_apply_enchantment_button"):
+            self.run_deck_apply_enchantment_button.Enable(True)
+        if hasattr(self, "run_deck_clear_enchantment_button"):
+            self.run_deck_clear_enchantment_button.Enable(True)
+
+        self._update_run_deck_enchantment_choice()
+        if enchantment_id and hasattr(self, "run_deck_enchantment_choice"):
+            candidate_ids = getattr(self, "run_deck_enchantment_candidate_ids", [])
+            if enchantment_id in candidate_ids:
+                self.run_deck_enchantment_choice.SetSelection(candidate_ids.index(enchantment_id))
+
+        lines = [
+            f"卡牌：{format_run_item_label(item, item_kind='deck')}",
+            f"升级等级：{upgrade_level if upgrade_level > 0 else '无'}",
+        ]
+        if enchantment_id:
+            enchantment_text = format_localized_id_text(enchantment_id, category="enchantments")
+            if enchantment_amount > 1:
+                enchantment_text += f" ×{enchantment_amount}"
+            lines.append(f"附魔：{enchantment_text}")
+        else:
+            lines.append("附魔：无")
+        self.run_deck_selected_meta_preview_ctrl.SetValue("\n".join(lines))
+
+
+    def on_select_run_item(self, event: wx.CommandEvent, item_kind: str) -> None:
+        if self._normalize_run_item_kind(item_kind) == "deck":
+            self._update_selected_deck_meta_controls()
+        event.Skip()
+
+    def on_run_deck_enchantment_search_changed(self, event: wx.CommandEvent) -> None:
+        self._update_run_deck_enchantment_choice()
+        event.Skip()
+
     def _update_run_localized_preview(self) -> None:
         """Update run localized preview controls."""
         if not hasattr(self, 'run_character_preview_ctrl') or not hasattr(self, 'run_localized_preview_ctrl'):
             return
-        
-        # Check if current file is RUN_HISTORY or CURRENT_RUN
+
         if not (self.current_info and self.current_info.kind in (SaveFileKind.RUN_HISTORY, SaveFileKind.CURRENT_RUN)):
             self.run_character_preview_ctrl.SetValue("")
             self.run_localized_preview_ctrl.SetValue("")
             self._update_all_run_item_listboxes()
+            self._update_selected_deck_meta_controls()
             return
-        
-        # Update character preview
+
+        self._sync_all_run_items_from_editor_text()
+
         character = self.run_character_ctrl.GetValue().strip() if hasattr(self, 'run_character_ctrl') else ""
         character_preview = format_localized_id_text(character, category="characters")
         self.run_character_preview_ctrl.SetValue(character_preview)
-        
-        # Read deck, relic, and potion IDs
-        deck_ids = []
-        relic_ids = []
-        potion_ids = []
-        
-        if hasattr(self, 'run_deck_ids_ctrl'):
-            deck_ids = [line.strip() for line in self.run_deck_ids_ctrl.GetValue().splitlines() if line.strip()]
-        if hasattr(self, 'run_relic_ids_ctrl'):
-            relic_ids = [line.strip() for line in self.run_relic_ids_ctrl.GetValue().splitlines() if line.strip()]
-        if hasattr(self, 'run_potion_ids_ctrl'):
-            potion_ids = [line.strip() for line in self.run_potion_ids_ctrl.GetValue().splitlines() if line.strip()]
-        
-        # Read search query and selected filter
+
+        deck_items = self._get_run_items("deck")
+        relic_items = self._get_run_items("relic")
+        potion_items = self._get_run_items("potion")
+
         search_query = self.run_localized_search_ctrl.GetValue().strip() if hasattr(self, 'run_localized_search_ctrl') else ""
         selected_filter = "全部"
         if hasattr(self, 'run_localized_filter_choice'):
@@ -1193,30 +1519,29 @@ class StS2MainFrame(wx.Frame):
 
         empty_text = "无匹配项" if search_query else "无"
         sections: list[str] = []
-        
-        # Build sections conditionally based on selected filter
+
         if selected_filter in ("全部", "卡组"):
-            deck_preview = build_localized_preview_text(
-                deck_ids,
-                category="cards",
+            deck_preview = build_run_items_preview_text(
+                deck_items,
+                item_kind="deck",
                 search_query=search_query,
                 empty_text=empty_text,
             )
             sections.append(f"【卡组】\n{deck_preview}")
 
         if selected_filter in ("全部", "遗物"):
-            relic_preview = build_localized_preview_text(
-                relic_ids,
-                category="relics",
+            relic_preview = build_run_items_preview_text(
+                relic_items,
+                item_kind="relics",
                 search_query=search_query,
                 empty_text=empty_text,
             )
             sections.append(f"【遗物】\n{relic_preview}")
 
         if selected_filter in ("全部", "药水"):
-            potion_preview = build_localized_preview_text(
-                potion_ids,
-                category="potions",
+            potion_preview = build_run_items_preview_text(
+                potion_items,
+                item_kind="potions",
                 search_query=search_query,
                 empty_text=empty_text,
             )
@@ -1225,6 +1550,7 @@ class StS2MainFrame(wx.Frame):
         preview_text = "\n\n".join(sections) if sections else empty_text
         self.run_localized_preview_ctrl.SetValue(preview_text)
         self._update_all_run_item_listboxes()
+        self._update_selected_deck_meta_controls()
 
     def _update_progress_localized_preview(self) -> None:
         """Update progress localized preview controls."""
@@ -1245,8 +1571,10 @@ class StS2MainFrame(wx.Frame):
 
     def on_run_localized_preview_changed(self, event: wx.CommandEvent) -> None:
         """Handle run localized preview change event."""
+        self._sync_all_run_items_from_editor_text()
         self._update_run_localized_preview()
         event.Skip()
+
 
     def on_run_localized_filter_changed(self, event: wx.CommandEvent) -> None:
         """Handle run localized preview search/filter event."""
@@ -1276,38 +1604,35 @@ class StS2MainFrame(wx.Frame):
 
     def _load_selected_run_player_fields(self) -> None:
         """Load the selected player's fields into the player editor controls."""
-        # Only proceed if we have a run history file and player choice control
-        if not (self.current_info and 
-                self.current_info.kind in (SaveFileKind.RUN_HISTORY, SaveFileKind.CURRENT_RUN) and 
+        if not (self.current_info and
+                self.current_info.kind in (SaveFileKind.RUN_HISTORY, SaveFileKind.CURRENT_RUN) and
                 hasattr(self, 'run_player_choice')):
             self._clear_run_player_editor()
             return
-        
-        # Update candidate choices
+
         self._update_all_run_candidate_choices()
-        
+
         selected_index = self.run_player_choice.GetSelection()
-        
-        # If no player selected, clear fields but keep the choice list
         if selected_index == wx.NOT_FOUND:
             if hasattr(self, 'run_character_ctrl'):
                 self.run_character_ctrl.SetValue("")
             if hasattr(self, 'run_max_potion_slots_ctrl'):
                 self.run_max_potion_slots_ctrl.SetValue(0)
+            self.run_deck_items = []
+            self.run_relic_items = []
+            self.run_potion_items = []
             if hasattr(self, 'run_deck_ids_ctrl'):
-                self.run_deck_ids_ctrl.SetValue("")
+                self.run_deck_ids_ctrl.ChangeValue("")
             if hasattr(self, 'run_relic_ids_ctrl'):
-                self.run_relic_ids_ctrl.SetValue("")
+                self.run_relic_ids_ctrl.ChangeValue("")
             if hasattr(self, 'run_potion_ids_ctrl'):
-                self.run_potion_ids_ctrl.SetValue("")
+                self.run_potion_ids_ctrl.ChangeValue("")
             self._update_run_localized_preview()
             return
-        
-        # Extract player fields using top-level import
+
         try:
             fields = extract_run_player_fields(self.current_data, selected_index)
-            
-            # Populate controls with extracted fields
+
             if hasattr(self, 'run_character_ctrl'):
                 self.run_character_ctrl.SetValue(fields.get("character") or "")
             if hasattr(self, 'run_max_potion_slots_ctrl'):
@@ -1315,17 +1640,21 @@ class StS2MainFrame(wx.Frame):
                 if not isinstance(max_potion_slots, int):
                     max_potion_slots = 0
                 self.run_max_potion_slots_ctrl.SetValue(max_potion_slots)
+
+            self.run_deck_items = normalize_run_item_list(fields.get("deck_items", []), item_kind="deck")
+            self.run_relic_items = normalize_run_item_list(fields.get("relic_items", []), item_kind="relics")
+            self.run_potion_items = normalize_run_item_list(fields.get("potion_items", []), item_kind="potions")
+
             if hasattr(self, 'run_deck_ids_ctrl'):
-                self.run_deck_ids_ctrl.SetValue("\n".join(fields.get("deck_ids", [])))
+                self.run_deck_ids_ctrl.ChangeValue("\n".join(build_run_item_id_lines(self.run_deck_items)))
             if hasattr(self, 'run_relic_ids_ctrl'):
-                self.run_relic_ids_ctrl.SetValue("\n".join(fields.get("relic_ids", [])))
+                self.run_relic_ids_ctrl.ChangeValue("\n".join(build_run_item_id_lines(self.run_relic_items)))
             if hasattr(self, 'run_potion_ids_ctrl'):
-                self.run_potion_ids_ctrl.SetValue("\n".join(fields.get("potion_ids", [])))
-            
+                self.run_potion_ids_ctrl.ChangeValue("\n".join(build_run_item_id_lines(self.run_potion_items)))
+
             self._update_run_localized_preview()
-                
+
         except Exception as exc:
-            # Clear fields on error
             if hasattr(self, 'run_character_ctrl'):
                 self.run_character_ctrl.SetValue("")
             if hasattr(self, 'run_max_potion_slots_ctrl'):
@@ -1336,6 +1665,9 @@ class StS2MainFrame(wx.Frame):
                 self.run_relic_ids_ctrl.SetValue("")
             if hasattr(self, 'run_potion_ids_ctrl'):
                 self.run_potion_ids_ctrl.SetValue("")
+            self.run_deck_items = []
+            self.run_relic_items = []
+            self.run_potion_items = []
             self._update_run_localized_preview()
             self.SetStatusText(f"加载玩家结构化字段失败：{exc}")
 
@@ -1633,20 +1965,18 @@ class StS2MainFrame(wx.Frame):
 
                 selected_player = self.run_player_choice.GetSelection() if hasattr(self, "run_player_choice") else wx.NOT_FOUND
                 if selected_player != wx.NOT_FOUND:
+                    self._sync_all_run_items_from_editor_text()
                     character = self.run_character_ctrl.GetValue().strip()
                     max_potion_slot_count = self.run_max_potion_slots_ctrl.GetValue()
-                    deck_ids = [line.strip() for line in self.run_deck_ids_ctrl.GetValue().splitlines() if line.strip()]
-                    relic_ids = [line.strip() for line in self.run_relic_ids_ctrl.GetValue().splitlines() if line.strip()]
-                    potion_ids = [line.strip() for line in self.run_potion_ids_ctrl.GetValue().splitlines() if line.strip()]
 
                     updated_data = apply_run_player_fields(
                         updated_data,
                         player_index=selected_player,
                         character=character,
                         max_potion_slot_count=max_potion_slot_count,
-                        deck_ids=deck_ids,
-                        relic_ids=relic_ids,
-                        potion_ids=potion_ids,
+                        deck_items=self.run_deck_items,
+                        relic_items=self.run_relic_items,
+                        potion_items=self.run_potion_items,
                     )
 
                 self._update_current_views(self.current_info, updated_data)
@@ -1804,71 +2134,64 @@ class StS2MainFrame(wx.Frame):
         return candidate_ids[selected_index]
 
     def _append_run_candidate_to_editor(self, item_kind: str) -> None:
-        """Append selected candidate ID to the target text control."""
-        config = self._get_run_candidate_config(item_kind)
+        """Append selected candidate item to the structured item state."""
+        normalized_kind = self._normalize_run_item_kind(item_kind)
+        config = self._get_run_candidate_config(normalized_kind)
         if not config:
             return
-        
-        target_ctrl = getattr(self, config["target_ctrl_attr"], None)
-        if not target_ctrl:
-            return
-        
-        selected_id = self._get_selected_run_candidate_id(item_kind)
+
+        selected_id = self._get_selected_run_candidate_id(normalized_kind)
         if not selected_id:
             self.SetStatusText(f"当前没有可添加的{config['display_name']}候选项")
             return
-        
-        # Read existing IDs
-        lines = [line.strip() for line in target_ctrl.GetValue().splitlines() if line.strip()]
-        
-        # Append selected ID
-        lines.append(selected_id)
-        
-        # Write back
-        target_ctrl.SetValue("\n".join(lines))
+
+        items = list(self._get_run_items(normalized_kind))
+        items.append({"id": selected_id})
+        self._set_run_items(normalized_kind, items)
+        self._update_run_localized_preview()
+        self._set_selected_run_item_index(normalized_kind, len(items) - 1)
         self.SetStatusText(f"已添加{config['display_name']} ID：{selected_id}")
 
     def _remove_run_candidate_from_editor(self, item_kind: str) -> None:
-        """Remove one instance of selected candidate ID from the target text control."""
-        config = self._get_run_candidate_config(item_kind)
+        """Remove one instance of selected candidate item from the structured item state."""
+        normalized_kind = self._normalize_run_item_kind(item_kind)
+        config = self._get_run_candidate_config(normalized_kind)
         if not config:
             return
-        
-        target_ctrl = getattr(self, config["target_ctrl_attr"], None)
-        if not target_ctrl:
-            return
-        
-        selected_id = self._get_selected_run_candidate_id(item_kind)
+
+        selected_id = self._get_selected_run_candidate_id(normalized_kind)
         if not selected_id:
             self.SetStatusText(f"当前没有可删除的{config['display_name']}候选项")
             return
-        
-        # Read existing IDs
-        lines = [line.strip() for line in target_ctrl.GetValue().splitlines() if line.strip()]
-        
-        if not lines:
+
+        items = list(self._get_run_items(normalized_kind))
+        if not items:
             self.SetStatusText(f"当前{config['display_name']}列表为空")
             return
-        
-        # Build removable IDs set (include both with and without prefix)
+
         removable_ids = {selected_id}
         if selected_id.startswith(config["prefix"]):
             removable_ids.add(selected_id[len(config["prefix"]):])
-        
-        # Find last matching ID from the end
+
         removed_id = None
-        for i in range(len(lines) - 1, -1, -1):
-            if lines[i] in removable_ids:
-                removed_id = lines[i]
-                del lines[i]
+        removed_index = None
+        for i in range(len(items) - 1, -1, -1):
+            item = items[i]
+            item_id = str(item.get("id", "")) if isinstance(item, dict) else str(item)
+            if item_id in removable_ids:
+                removed_id = item_id
+                removed_index = i
+                del items[i]
                 break
-        
+
         if removed_id is None:
             self.SetStatusText(f"当前{config['display_name']}列表中不存在：{selected_id}")
             return
-        
-        # Write back
-        target_ctrl.SetValue("\n".join(lines))
+
+        self._set_run_items(normalized_kind, items)
+        self._update_run_localized_preview()
+        if items and removed_index is not None:
+            self._set_selected_run_item_index(normalized_kind, min(removed_index, len(items) - 1))
         self.SetStatusText(f"已删除{config['display_name']} ID：{removed_id}")
 
     def on_run_candidate_search_changed(self, event: wx.CommandEvent, item_kind: str) -> None:
@@ -1888,33 +2211,25 @@ class StS2MainFrame(wx.Frame):
         return getattr(self, f"run_{item_kind}_items_listbox", None)
 
     def _read_run_item_ids_from_editor(self, item_kind: str) -> list[str]:
-        config = self._get_run_candidate_config(item_kind)
-        if not config:
-            return []
+        normalized_kind = self._normalize_run_item_kind(item_kind)
+        self._sync_run_items_from_editor_text(normalized_kind)
+        return build_run_item_id_lines(self._get_run_items(normalized_kind))
 
-        target_ctrl = getattr(self, config["target_ctrl_attr"], None)
-        if target_ctrl is None:
-            return []
-
-        return [line.strip() for line in target_ctrl.GetValue().splitlines() if line.strip()]
 
     def _write_run_item_ids_to_editor(self, item_kind: str, item_ids: list[str]) -> None:
-        config = self._get_run_candidate_config(item_kind)
-        if not config:
-            return
+        normalized_kind = self._normalize_run_item_kind(item_kind)
+        structured_kind = self._structured_item_kind(normalized_kind)
+        rebuilt_items = _rebuild_run_item_list(
+            self._get_run_items(normalized_kind),
+            item_ids,
+            item_kind=structured_kind,
+        )
+        self._set_run_items(normalized_kind, rebuilt_items)
 
-        target_ctrl = getattr(self, config["target_ctrl_attr"], None)
-        if target_ctrl is None:
-            return
-
-        target_ctrl.SetValue("\n".join(item_ids))
 
     def _update_run_item_listbox(self, item_kind: str) -> None:
-        config = self._get_run_candidate_config(item_kind)
-        if not config:
-            return
-
-        listbox = self._get_run_item_listbox(item_kind)
+        normalized_kind = self._normalize_run_item_kind(item_kind)
+        listbox = self._get_run_item_listbox(normalized_kind)
         if listbox is None:
             return
 
@@ -1923,8 +2238,8 @@ class StS2MainFrame(wx.Frame):
             return
 
         current_selection = listbox.GetSelection()
-        item_ids = self._read_run_item_ids_from_editor(item_kind)
-        labels = [format_localized_id_text(item_id, category=config["category"]) for item_id in item_ids]
+        items = self._get_run_items(normalized_kind)
+        labels = [format_run_item_label(item, item_kind=normalized_kind) for item in items]
         listbox.Set(labels)
 
         if labels and current_selection != wx.NOT_FOUND:
@@ -1952,72 +2267,92 @@ class StS2MainFrame(wx.Frame):
             listbox.SetSelection(index)
 
     def _remove_selected_run_item_from_editor(self, item_kind: str) -> None:
-        config = self._get_run_candidate_config(item_kind)
+        normalized_kind = self._normalize_run_item_kind(item_kind)
+        config = self._get_run_candidate_config(normalized_kind)
         if not config:
             return
 
-        selected_index = self._get_selected_run_item_index(item_kind)
+        selected_index = self._get_selected_run_item_index(normalized_kind)
         if selected_index is None:
             self.SetStatusText(f"请先在{config['display_name']}当前列表中选择一项")
             return
 
-        item_ids = self._read_run_item_ids_from_editor(item_kind)
-        if selected_index < 0 or selected_index >= len(item_ids):
+        items = list(self._get_run_items(normalized_kind))
+        if selected_index < 0 or selected_index >= len(items):
             self.SetStatusText(f"当前{config['display_name']}列表选择无效")
             return
 
-        removed_id = item_ids.pop(selected_index)
-        self._write_run_item_ids_to_editor(item_kind, item_ids)
-        if item_ids:
-            self._set_selected_run_item_index(item_kind, min(selected_index, len(item_ids) - 1))
+        removed_item = items.pop(selected_index)
+        removed_id = str(removed_item.get("id", "")) if isinstance(removed_item, dict) else str(removed_item)
+        self._set_run_items(normalized_kind, items)
+        self._update_run_localized_preview()
+        if items:
+            self._set_selected_run_item_index(normalized_kind, min(selected_index, len(items) - 1))
         self.SetStatusText(f"已删除选中的{config['display_name']}：{removed_id}")
 
     def _move_selected_run_item_in_editor(self, item_kind: str, direction: int) -> None:
-        config = self._get_run_candidate_config(item_kind)
+        normalized_kind = self._normalize_run_item_kind(item_kind)
+        config = self._get_run_candidate_config(normalized_kind)
         if not config:
             return
 
-        selected_index = self._get_selected_run_item_index(item_kind)
+        selected_index = self._get_selected_run_item_index(normalized_kind)
         if selected_index is None:
             self.SetStatusText(f"请先在{config['display_name']}当前列表中选择一项")
             return
 
-        item_ids = self._read_run_item_ids_from_editor(item_kind)
+        items = list(self._get_run_items(normalized_kind))
         new_index = selected_index + direction
-        if new_index < 0 or new_index >= len(item_ids):
+        if new_index < 0 or new_index >= len(items):
             self.SetStatusText(f"选中的{config['display_name']}已无法继续移动")
             return
 
-        item_ids[selected_index], item_ids[new_index] = item_ids[new_index], item_ids[selected_index]
-        self._write_run_item_ids_to_editor(item_kind, item_ids)
-        self._set_selected_run_item_index(item_kind, new_index)
+        items[selected_index], items[new_index] = items[new_index], items[selected_index]
+        self._set_run_items(normalized_kind, items)
+        self._update_run_localized_preview()
+        self._set_selected_run_item_index(normalized_kind, new_index)
         move_text = "上移" if direction < 0 else "下移"
         self.SetStatusText(f"已{move_text}选中的{config['display_name']}")
 
     def _replace_selected_run_item_in_editor(self, item_kind: str) -> None:
-        config = self._get_run_candidate_config(item_kind)
+        normalized_kind = self._normalize_run_item_kind(item_kind)
+        config = self._get_run_candidate_config(normalized_kind)
         if not config:
             return
 
-        selected_index = self._get_selected_run_item_index(item_kind)
+        selected_index = self._get_selected_run_item_index(normalized_kind)
         if selected_index is None:
             self.SetStatusText(f"请先在{config['display_name']}当前列表中选择一项")
             return
 
-        selected_candidate_id = self._get_selected_run_candidate_id(item_kind)
+        selected_candidate_id = self._get_selected_run_candidate_id(normalized_kind)
         if not selected_candidate_id:
             self.SetStatusText(f"当前没有可用于替换的{config['display_name']}候选项")
             return
 
-        item_ids = self._read_run_item_ids_from_editor(item_kind)
-        if selected_index < 0 or selected_index >= len(item_ids):
+        items = list(self._get_run_items(normalized_kind))
+        if selected_index < 0 or selected_index >= len(items):
             self.SetStatusText(f"当前{config['display_name']}列表选择无效")
             return
 
-        old_id = item_ids[selected_index]
-        item_ids[selected_index] = selected_candidate_id
-        self._write_run_item_ids_to_editor(item_kind, item_ids)
-        self._set_selected_run_item_index(item_kind, selected_index)
+        original_item = items[selected_index]
+        if isinstance(original_item, dict):
+            updated_item = dict(original_item)
+            old_id = str(updated_item.get("id", ""))
+        else:
+            updated_item = {"id": str(original_item)}
+            old_id = str(original_item)
+
+        updated_item["id"] = selected_candidate_id
+        if normalized_kind == "deck" and old_id != selected_candidate_id:
+            updated_item.pop("current_upgrade_level", None)
+            updated_item.pop("enchantment", None)
+            updated_item.pop("props", None)
+
+        items[selected_index] = updated_item
+        self._set_run_items(normalized_kind, items)
+        self._update_run_localized_preview()
+        self._set_selected_run_item_index(normalized_kind, selected_index)
         self.SetStatusText(f"已将选中的{config['display_name']}从 {old_id} 替换为 {selected_candidate_id}")
 
     def on_remove_selected_run_item(self, event: wx.CommandEvent, item_kind: str) -> None:
@@ -2031,6 +2366,88 @@ class StS2MainFrame(wx.Frame):
 
     def on_replace_selected_run_item(self, event: wx.CommandEvent, item_kind: str) -> None:
         self._replace_selected_run_item_in_editor(item_kind)
+
+    def on_apply_selected_deck_upgrade(self, event: wx.CommandEvent | None) -> None:
+        selected_index = self._get_selected_run_item_index("deck")
+        if selected_index is None:
+            self.SetStatusText("请先在卡组当前列表中选择一张卡")
+            return
+
+        items = list(self._get_run_items("deck"))
+        if selected_index < 0 or selected_index >= len(items):
+            self.SetStatusText("当前卡组选择无效")
+            return
+
+        item = dict(items[selected_index]) if isinstance(items[selected_index], dict) else {"id": str(items[selected_index])}
+        upgrade_level = self.run_deck_upgrade_level_ctrl.GetValue() if hasattr(self, "run_deck_upgrade_level_ctrl") else 0
+        if isinstance(upgrade_level, int) and upgrade_level > 0:
+            item["current_upgrade_level"] = upgrade_level
+        else:
+            item.pop("current_upgrade_level", None)
+
+        items[selected_index] = item
+        self._set_run_items("deck", items)
+        self._update_run_localized_preview()
+        self._set_selected_run_item_index("deck", selected_index)
+        self._update_selected_deck_meta_controls()
+        if isinstance(upgrade_level, int) and upgrade_level > 0:
+            self.SetStatusText(f"已将选中卡牌升级等级设置为 +{upgrade_level}")
+        else:
+            self.SetStatusText("已清除选中卡牌的升级等级")
+
+    def on_clear_selected_deck_upgrade(self, event: wx.CommandEvent | None) -> None:
+        if hasattr(self, "run_deck_upgrade_level_ctrl"):
+            self.run_deck_upgrade_level_ctrl.SetValue(0)
+        self.on_apply_selected_deck_upgrade(event)
+
+    def on_apply_selected_deck_enchantment(self, event: wx.CommandEvent | None) -> None:
+        selected_index = self._get_selected_run_item_index("deck")
+        if selected_index is None:
+            self.SetStatusText("请先在卡组当前列表中选择一张卡")
+            return
+
+        selected_enchantment_id = self._get_selected_run_deck_enchantment_id()
+        if not selected_enchantment_id:
+            self.SetStatusText("当前没有可应用的附魔候选项")
+            return
+
+        items = list(self._get_run_items("deck"))
+        if selected_index < 0 or selected_index >= len(items):
+            self.SetStatusText("当前卡组选择无效")
+            return
+
+        item = dict(items[selected_index]) if isinstance(items[selected_index], dict) else {"id": str(items[selected_index])}
+        enchantment_amount = self.run_deck_enchantment_amount_ctrl.GetValue() if hasattr(self, "run_deck_enchantment_amount_ctrl") else 1
+        if not isinstance(enchantment_amount, int) or enchantment_amount <= 0:
+            enchantment_amount = 1
+        item["enchantment"] = {"id": selected_enchantment_id, "amount": enchantment_amount}
+
+        items[selected_index] = item
+        self._set_run_items("deck", items)
+        self._update_run_localized_preview()
+        self._set_selected_run_item_index("deck", selected_index)
+        self._update_selected_deck_meta_controls()
+        self.SetStatusText(f"已为选中卡牌应用附魔：{selected_enchantment_id}")
+
+    def on_clear_selected_deck_enchantment(self, event: wx.CommandEvent | None) -> None:
+        selected_index = self._get_selected_run_item_index("deck")
+        if selected_index is None:
+            self.SetStatusText("请先在卡组当前列表中选择一张卡")
+            return
+
+        items = list(self._get_run_items("deck"))
+        if selected_index < 0 or selected_index >= len(items):
+            self.SetStatusText("当前卡组选择无效")
+            return
+
+        item = dict(items[selected_index]) if isinstance(items[selected_index], dict) else {"id": str(items[selected_index])}
+        item.pop("enchantment", None)
+        items[selected_index] = item
+        self._set_run_items("deck", items)
+        self._update_run_localized_preview()
+        self._set_selected_run_item_index("deck", selected_index)
+        self._update_selected_deck_meta_controls()
+        self.SetStatusText("已清除选中卡牌的附魔")
 
 
 class StS2App(wx.App):

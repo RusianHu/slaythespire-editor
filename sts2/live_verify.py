@@ -8,7 +8,11 @@ from typing import Any
 
 from .models import SaveFileInfo, SaveFileKind
 from .save_io import SaveValidationError, StS2SaveIO
-from .structured import _rebuild_run_item_list
+from .structured import (
+    _rebuild_run_item_list,
+    format_run_card_text,
+    format_run_item_label,
+)
 
 
 CURRENT_RUN_LIVE_FILENAME = "current_run.save"
@@ -52,14 +56,57 @@ def _extract_item_ids(items: Any) -> list[str]:
     return result
 
 
-def _preview_ids(items: Any, limit: int = 6) -> str:
-    ids = [item_id for item_id in _extract_item_ids(items) if item_id]
-    if not ids:
+def _preview_ids(items: Any, limit: int = 6, *, item_kind: str | None = None) -> str:
+    if not isinstance(items, list) or not items:
         return "无"
-    preview = ", ".join(ids[:limit])
-    if len(ids) > limit:
+
+    values: list[str] = []
+    for item in items[:limit]:
+        if item_kind == "deck":
+            values.append(format_run_card_text(item))
+        elif item_kind == "relics":
+            values.append(format_run_item_label(item, item_kind="relic"))
+        elif item_kind == "potions":
+            values.append(format_run_item_label(item, item_kind="potion"))
+        else:
+            item_id = None
+            if isinstance(item, dict):
+                item_id = item.get("id")
+            if item_id is None:
+                item_id = item
+            values.append(str(item_id))
+
+    if not values:
+        return "无"
+
+    preview = ", ".join(values)
+    if len(items) > limit:
         preview += " ..."
     return preview
+
+
+def _has_special_card_metadata(item: Any) -> bool:
+    if not isinstance(item, dict):
+        return False
+    if isinstance(item.get("current_upgrade_level"), int) and item.get("current_upgrade_level", 0) > 0:
+        return True
+    enchantment = item.get("enchantment")
+    if isinstance(enchantment, dict) and isinstance(enchantment.get("id"), str) and enchantment.get("id"):
+        return True
+    return False
+
+
+def _build_deck_probe_preview(deck: Any, limit: int = 8) -> tuple[str, str | None]:
+    if not isinstance(deck, list) or not deck:
+        return ("无", None)
+
+    all_preview = _preview_ids(deck, limit=limit, item_kind="deck")
+    special_cards = [item for item in deck if _has_special_card_metadata(item)]
+    if not special_cards:
+        return (all_preview, None)
+
+    special_preview = _preview_ids(special_cards, limit=limit, item_kind="deck")
+    return (all_preview, special_preview)
 
 
 def _source_label(source: str) -> str:
@@ -221,9 +268,12 @@ def build_current_run_probe_text(
         lines.append(f"卡组数量：{len(deck) if isinstance(deck, list) else '?'}")
         lines.append(f"遗物数量：{len(relics) if isinstance(relics, list) else '?'}")
         lines.append(f"药水数量：{len(potions) if isinstance(potions, list) else '?'}")
-        lines.append(f"卡组预览：{_preview_ids(deck)}")
-        lines.append(f"遗物预览：{_preview_ids(relics)}")
-        lines.append(f"药水预览：{_preview_ids(potions)}")
+        deck_preview, special_deck_preview = _build_deck_probe_preview(deck, limit=8)
+        lines.append(f"卡组预览：{deck_preview}")
+        if special_deck_preview:
+            lines.append(f"特殊卡预览：{special_deck_preview}")
+        lines.append(f"遗物预览：{_preview_ids(relics, item_kind='relics')}")
+        lines.append(f"药水预览：{_preview_ids(potions, item_kind='potions')}")
         lines.append("")
 
     return "\n".join(lines).rstrip()
@@ -341,9 +391,9 @@ def build_current_run_patch_summary(
     lines.append(f"卡组数量：{len(before_deck)} -> {len(after_deck)}")
     lines.append(f"遗物数量：{len(before_relics)} -> {len(after_relics)}")
     lines.append(f"药水数量：{len(before_potions)} -> {len(after_potions)}")
-    lines.append(f"修改后卡组尾部预览：{_preview_ids(after_deck[-6:])}")
-    lines.append(f"修改后遗物尾部预览：{_preview_ids(after_relics[-6:])}")
-    lines.append(f"修改后药水预览：{_preview_ids(after_potions)}")
+    lines.append(f"修改后卡组尾部预览：{_preview_ids(after_deck[-6:], item_kind='deck')}")
+    lines.append(f"修改后遗物尾部预览：{_preview_ids(after_relics[-6:], item_kind='relics')}")
+    lines.append(f"修改后药水预览：{_preview_ids(after_potions, item_kind='potions')}")
     return "\n".join(lines)
 
 

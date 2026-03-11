@@ -33,7 +33,7 @@ python -m pip install -U -i https://pypi.tuna.tsinghua.edu.cn/simple -r requirem
 python .\editor_sts2.py
 ```
 
-### 按需指定存档目录 / PCK 启动
+### 按需指定存档目录 / PCK 启动（不必须，可自动感知）
 
 ```powershell
 python .\editor_sts2.py --save-dir "C:\Program Files (x86)\Steam\userdata\<SteamID>\2868840\remote\profile1\saves"

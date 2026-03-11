@@ -33,6 +33,7 @@ KNOWN_DICTIONARY_FILES = (
     "card_keywords.json",
     "powers.json",
     "modifiers.json",
+    "enchantments.json",
     "encounters.json",
     "events.json",
     "game_modes.json",
@@ -294,6 +295,7 @@ def build_common_localization_indexes_from_pck(
         "relics": ("relics", "RELIC."),
         "potions": ("potions", "POTION."),
         "characters": ("characters", "CHARACTER."),
+        "enchantments": ("enchantments", "ENCHANTMENT."),
     }
 
     result: dict[str, dict[str, str]] = {}

@@ -30,6 +30,9 @@ class SaveFileInfo:
 class RunCard:
     id: str
     floor_added_to_deck: int | None = None
+    current_upgrade_level: int | None = None
+    enchantment: dict[str, Any] | None = None
+    props: dict[str, Any] | None = None
     raw: dict[str, Any] | None = None
 
 

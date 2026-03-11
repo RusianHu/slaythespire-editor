@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from typing import Any
+from copy import deepcopy
 from functools import lru_cache
+from typing import Any
 
 from .models import (
     PrefsSummary,
@@ -93,6 +94,7 @@ def _build_lookup_candidates(item_id: str, *, category: str) -> list[str]:
         "cards": "CARD.",
         "relics": "RELIC.",
         "potions": "POTION.",
+        "enchantments": "ENCHANTMENT.",
     }
     
     # 默认候选先放原始 ID
@@ -307,10 +309,281 @@ def search_localized_ids(
     return matched_ids[:limit]
 
 
+def _clone_json_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: _clone_json_value(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_clone_json_value(item) for item in value]
+    return deepcopy(value)
+
+
+def _extract_item_id(item: Any) -> str:
+    if isinstance(item, dict):
+        return str(item.get("id", ""))
+    item_id = getattr(item, "id", None)
+    if item_id is not None:
+        return str(item_id)
+    return str(item)
+
+
+def _normalize_enchantment_dict(enchantment: Any) -> dict[str, Any] | None:
+    if not isinstance(enchantment, dict):
+        return None
+
+    enchantment_id = str(enchantment.get("id", "")).strip()
+    if not enchantment_id:
+        return None
+
+    normalized: dict[str, Any] = {"id": enchantment_id}
+    amount = enchantment.get("amount")
+    if isinstance(amount, int):
+        normalized["amount"] = amount
+
+    for key, value in enchantment.items():
+        if key in {"id", "amount"}:
+            continue
+        normalized[key] = _clone_json_value(value)
+
+    return normalized
+
+
+def _normalize_run_item_dict(item: Any, *, item_kind: str, index: int | None = None) -> dict[str, Any]:
+    if item_kind not in ("deck", "relics", "potions"):
+        raise ValueError(f"item_kind 必须是 'deck', 'relics' 或 'potions'，当前值：{item_kind}")
+
+    if isinstance(item, dict):
+        normalized = _clone_json_value(item)
+    else:
+        normalized = {"id": str(item)}
+
+    normalized["id"] = str(normalized.get("id", ""))
+
+    if item_kind in ("deck", "relics"):
+        if not isinstance(normalized.get("floor_added_to_deck"), int):
+            normalized["floor_added_to_deck"] = 1
+
+    if item_kind == "potions" and index is not None:
+        normalized["slot_index"] = index
+
+    if item_kind == "deck":
+        upgrade_level = normalized.get("current_upgrade_level")
+        if isinstance(upgrade_level, int) and upgrade_level > 0:
+            normalized["current_upgrade_level"] = upgrade_level
+        else:
+            normalized.pop("current_upgrade_level", None)
+
+        enchantment = _normalize_enchantment_dict(normalized.get("enchantment"))
+        if enchantment is not None:
+            normalized["enchantment"] = enchantment
+        else:
+            normalized.pop("enchantment", None)
+
+        props = normalized.get("props")
+        if isinstance(props, dict):
+            normalized["props"] = _clone_json_value(props)
+        else:
+            normalized.pop("props", None)
+
+    return normalized
+
+
+def normalize_run_item_list(items: list[Any], *, item_kind: str) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    for index, item in enumerate(items):
+        normalized_index = index if item_kind == "potions" else None
+        result.append(_normalize_run_item_dict(item, item_kind=item_kind, index=normalized_index))
+    return result
+
+
+def format_run_card_text(item: RunCard | dict[str, Any] | str, *, locale: str = "zhs") -> str:
+    if isinstance(item, RunCard):
+        card_id = item.id
+        current_upgrade_level = item.current_upgrade_level
+        enchantment = item.enchantment
+    elif isinstance(item, dict):
+        normalized = _normalize_run_item_dict(item, item_kind="deck")
+        card_id = str(normalized.get("id", ""))
+        current_upgrade_level = normalized.get("current_upgrade_level")
+        enchantment = normalized.get("enchantment")
+    else:
+        card_id = str(item)
+        current_upgrade_level = None
+        enchantment = None
+
+    parts = [format_localized_id_text(card_id, category="cards", locale=locale)]
+
+    if isinstance(current_upgrade_level, int) and current_upgrade_level > 0:
+        parts.append(f"[+{current_upgrade_level}]")
+
+    if isinstance(enchantment, dict):
+        enchantment_id = str(enchantment.get("id", "")).strip()
+        enchantment_text = format_localized_id_text(enchantment_id, category="enchantments", locale=locale) if enchantment_id else "<未知附魔>"
+        amount = enchantment.get("amount")
+        if isinstance(amount, int) and amount > 1:
+            enchantment_text += f" ×{amount}"
+        parts.append(f"[附魔: {enchantment_text}]")
+
+    return " ".join(part for part in parts if part)
+
+
+def _run_card_matches_query(item: RunCard | dict[str, Any] | str, query: str | None) -> bool:
+    if not query or not query.strip():
+        return True
+
+    normalized_query = query.strip().casefold()
+
+    if isinstance(item, RunCard):
+        card_id = item.id
+        current_upgrade_level = item.current_upgrade_level
+        enchantment = item.enchantment
+    elif isinstance(item, dict):
+        normalized = _normalize_run_item_dict(item, item_kind="deck")
+        card_id = str(normalized.get("id", ""))
+        current_upgrade_level = normalized.get("current_upgrade_level")
+        enchantment = normalized.get("enchantment")
+    else:
+        card_id = str(item)
+        current_upgrade_level = None
+        enchantment = None
+
+    texts: list[str] = []
+    for candidate in _build_lookup_candidates(card_id, category="cards"):
+        texts.append(candidate)
+        zhs_name = _lookup_localized_name(candidate, category="cards", locale="zhs")
+        if zhs_name:
+            texts.append(zhs_name)
+        eng_name = _lookup_localized_name(candidate, category="cards", locale="eng")
+        if eng_name:
+            texts.append(eng_name)
+
+    if isinstance(current_upgrade_level, int) and current_upgrade_level > 0:
+        texts.extend([
+            f"+{current_upgrade_level}",
+            f"升级{current_upgrade_level}",
+            f"升级+{current_upgrade_level}",
+        ])
+
+    if isinstance(enchantment, dict):
+        enchantment_id = str(enchantment.get("id", "")).strip()
+        for candidate in _build_lookup_candidates(enchantment_id, category="enchantments"):
+            texts.append(candidate)
+            zhs_name = _lookup_localized_name(candidate, category="enchantments", locale="zhs")
+            if zhs_name:
+                texts.append(zhs_name)
+            eng_name = _lookup_localized_name(candidate, category="enchantments", locale="eng")
+            if eng_name:
+                texts.append(eng_name)
+        amount = enchantment.get("amount")
+        if isinstance(amount, int):
+            texts.append(str(amount))
+            texts.append(f"x{amount}")
+            texts.append(f"×{amount}")
+
+    return any(normalized_query in text.casefold() for text in texts if isinstance(text, str) and text)
+
+
+def build_run_cards_preview_text(
+    items: list[Any],
+    *,
+    locale: str = "zhs",
+    empty_text: str = "无",
+    search_query: str | None = None,
+) -> str:
+    if not items:
+        return empty_text
+
+    filtered_items = items
+    if search_query is not None:
+        filtered_items = [item for item in items if _run_card_matches_query(item, search_query)]
+
+    if not filtered_items:
+        return empty_text
+
+    lines = [format_run_card_text(item, locale=locale) for item in filtered_items]
+    lines = [line for line in lines if line]
+    if not lines:
+        return empty_text
+    return "\n".join(lines)
+
+
+def format_run_item_label(item: Any, *, item_kind: str, locale: str = "zhs") -> str:
+    normalized_kind = {
+        "deck": "deck",
+        "relic": "relics",
+        "relics": "relics",
+        "potion": "potions",
+        "potions": "potions",
+    }.get(item_kind, item_kind)
+
+    if normalized_kind == "deck":
+        return format_run_card_text(item, locale=locale)
+
+    category_map = {
+        "relics": "relics",
+        "potions": "potions",
+    }
+    category = category_map.get(normalized_kind)
+    if not category:
+        return _extract_item_id(item)
+    return format_localized_id_text(_extract_item_id(item), category=category, locale=locale)
+
+
+def build_run_item_id_lines(items: list[Any]) -> list[str]:
+    result: list[str] = []
+    for item in items:
+        item_id = _extract_item_id(item).strip()
+        if item_id:
+            result.append(item_id)
+    return result
+
+
+def build_run_items_preview_text(
+    items: list[Any],
+    *,
+    item_kind: str,
+    locale: str = "zhs",
+    empty_text: str = "无",
+    search_query: str | None = None,
+) -> str:
+    normalized_kind = {
+        "deck": "deck",
+        "relic": "relics",
+        "relics": "relics",
+        "potion": "potions",
+        "potions": "potions",
+    }.get(item_kind, item_kind)
+
+    if normalized_kind == "deck":
+        return build_run_cards_preview_text(items, locale=locale, empty_text=empty_text, search_query=search_query)
+
+    category_map = {
+        "relics": "relics",
+        "potions": "potions",
+    }
+    category = category_map.get(normalized_kind)
+    if not category:
+        return empty_text
+
+    return build_localized_preview_text(
+        build_run_item_id_lines(items),
+        category=category,
+        locale=locale,
+        empty_text=empty_text,
+        search_query=search_query,
+    )
+
+
 def _preview_ids(items: list[Any], *, category: str | None = None, limit: int = 8) -> str:
     values: list[str] = []
     for item in items[:limit]:
+        if category == "cards":
+            values.append(format_run_card_text(item))
+            continue
+
         item_id = getattr(item, "id", None)
+        if item_id is None:
+            item_id = _extract_item_id(item)
+
         if isinstance(item_id, str) and item_id:
             if category:
                 values.append(_format_id_with_name(item_id, category=category))
@@ -609,9 +882,13 @@ def _build_visited_coords_lines(data: dict[str, Any]) -> list[str]:
 
 def parse_run_card(item: Any) -> RunCard:
     if isinstance(item, dict):
+        props = item.get("props")
         return RunCard(
             id=str(item.get("id", "")),
             floor_added_to_deck=_as_int(item.get("floor_added_to_deck")),
+            current_upgrade_level=_as_int(item.get("current_upgrade_level")),
+            enchantment=_normalize_enchantment_dict(item.get("enchantment")),
+            props=_clone_json_value(props) if isinstance(props, dict) else None,
             raw=item,
         )
     return RunCard(id=str(item), raw={"value": item})
@@ -999,117 +1276,73 @@ def _rebuild_run_item_list(
 ) -> list[dict[str, Any]]:
     """
     按 new_ids 生成新的列表，尽量保留旧条目的元数据。
-    
-    Args:
-        existing_items: 现有条目列表
-        new_ids: 新的 ID 列表
-        item_kind: 条目类型，只允许 "deck" / "relics" / "potions"
-    
-    Returns:
-        新的条目列表
-    
-    Raises:
-        ValueError: 如果 item_kind 不合法
     """
     if item_kind not in ("deck", "relics", "potions"):
         raise ValueError(f"item_kind 必须是 'deck', 'relics' 或 'potions'，当前值：{item_kind}")
-    
-    result = []
+
+    result: list[dict[str, Any]] = []
     for index, new_id in enumerate(new_ids):
-        # 尝试从同索引位置获取旧条目
-        if index < len(existing_items) and isinstance(existing_items[index], dict):
-            # 复制旧条目并更新 id
-            new_item = existing_items[index].copy()
-            new_item["id"] = new_id
+        old_item = existing_items[index] if index < len(existing_items) else None
+        if isinstance(old_item, dict):
+            new_item = _clone_json_value(old_item)
+            old_id = str(new_item.get("id", ""))
         else:
-            # 创建新条目
             new_item = {"id": new_id}
-        
-        # 对 deck 和 relics：补充 floor_added_to_deck
-        if item_kind in ("deck", "relics"):
-            if "floor_added_to_deck" not in new_item:
-                new_item["floor_added_to_deck"] = 1
-        
-        # 对 potions：强制更新 slot_index
-        if item_kind == "potions":
-            new_item["slot_index"] = index
-        
-        result.append(new_item)
-    
+            old_id = ""
+
+        new_item["id"] = new_id
+
+        if item_kind == "deck" and old_id and old_id != new_id:
+            new_item.pop("current_upgrade_level", None)
+            new_item.pop("enchantment", None)
+            new_item.pop("props", None)
+
+        normalized_index = index if item_kind == "potions" else None
+        result.append(_normalize_run_item_dict(new_item, item_kind=item_kind, index=normalized_index))
+
     return result
 
 
 def extract_run_player_fields(data: Any, player_index: int) -> dict[str, Any]:
     """
     从历史战局数据中提取指定玩家的字段，供 GUI 结构化编辑表单使用。
-    
-    Args:
-        data: 历史战局数据
-        player_index: 玩家索引（从 0 开始）
-    
-    Returns:
-        包含 character, max_potion_slot_count, deck_ids, relic_ids, potion_ids 的字典
-    
-    Raises:
-        ValueError: 如果数据格式不正确
-        IndexError: 如果玩家索引超出范围
     """
     if not isinstance(data, dict):
         raise ValueError("历史战局数据必须是 JSON 对象")
-    
+
     players = data.get("players")
     if not isinstance(players, list):
         raise ValueError("历史战局缺少 players 列表")
-    
+
     if player_index < 0 or player_index >= len(players):
         raise IndexError("玩家索引超出范围")
-    
+
     player = players[player_index]
     if not isinstance(player, dict):
         raise ValueError("玩家数据必须是 JSON 对象")
-    
-    # 提取基础字段 - 兼容 character / character_id
+
     character = _as_str(player.get("character"))
     if not character:
         character = _as_str(player.get("character_id"))
     max_potion_slot_count = _as_int(player.get("max_potion_slot_count"))
-    
-    # 提取 deck_ids
-    deck_ids = []
+
     deck = player.get("deck", [])
-    if isinstance(deck, list):
-        for item in deck:
-            if isinstance(item, dict):
-                deck_ids.append(str(item.get("id", "")))
-            else:
-                deck_ids.append(str(item))
-    
-    # 提取 relic_ids
-    relic_ids = []
     relics = player.get("relics", [])
-    if isinstance(relics, list):
-        for item in relics:
-            if isinstance(item, dict):
-                relic_ids.append(str(item.get("id", "")))
-            else:
-                relic_ids.append(str(item))
-    
-    # 提取 potion_ids
-    potion_ids = []
     potions = player.get("potions", [])
-    if isinstance(potions, list):
-        for item in potions:
-            if isinstance(item, dict):
-                potion_ids.append(str(item.get("id", "")))
-            else:
-                potion_ids.append(str(item))
-    
+
+    deck_items = normalize_run_item_list(deck if isinstance(deck, list) else [], item_kind="deck")
+    relic_items = normalize_run_item_list(relics if isinstance(relics, list) else [], item_kind="relics")
+    potion_items = normalize_run_item_list(potions if isinstance(potions, list) else [], item_kind="potions")
+
     return {
         "character": character,
         "max_potion_slot_count": max_potion_slot_count,
-        "deck_ids": deck_ids,
-        "relic_ids": relic_ids,
-        "potion_ids": potion_ids,
+        "deck_items": deck_items,
+        "relic_items": relic_items,
+        "potion_items": potion_items,
+        "deck_ids": build_run_item_id_lines(deck_items),
+        "relic_ids": build_run_item_id_lines(relic_items),
+        "potion_ids": build_run_item_id_lines(potion_items),
     }
 
 
@@ -1119,94 +1352,77 @@ def apply_run_player_fields(
     player_index: int,
     character: str,
     max_potion_slot_count: int,
-    deck_ids: list[str],
-    relic_ids: list[str],
-    potion_ids: list[str],
+    deck_ids: list[str] | None = None,
+    relic_ids: list[str] | None = None,
+    potion_ids: list[str] | None = None,
+    deck_items: list[Any] | None = None,
+    relic_items: list[Any] | None = None,
+    potion_items: list[Any] | None = None,
 ) -> dict[str, Any]:
     """
     将玩家字段应用到历史战局数据，供 GUI 结构化编辑表单使用。
-    
-    Args:
-        data: 原始历史战局数据
-        player_index: 玩家索引（从 0 开始）
-        character: 角色 ID
-        max_potion_slot_count: 最大药水槽位数
-        deck_ids: 卡组 ID 列表
-        relic_ids: 遗物 ID 列表
-        potion_ids: 药水 ID 列表
-    
-    Returns:
-        更新后的历史战局数据字典
-    
-    Raises:
-        ValueError: 如果数据格式不正确
-        IndexError: 如果玩家索引超出范围
     """
     if not isinstance(data, dict):
         raise ValueError("历史战局数据必须是 JSON 对象")
-    
+
     players = data.get("players")
     if not isinstance(players, list):
         raise ValueError("历史战局缺少 players 列表")
-    
+
     if player_index < 0 or player_index >= len(players):
         raise IndexError("玩家索引超出范围")
-    
+
     player = players[player_index]
     if not isinstance(player, dict):
         raise ValueError("玩家数据必须是 JSON 对象")
-    
-    # 复制顶层 dict
+
     updated = data.copy()
-    
-    # 复制 players 列表
     updated_players = list(players)
-    
-    # 复制目标玩家 dict
     updated_player = player.copy()
-    
-    # 提取现有条目
+
     existing_deck = _extract_existing_player_items(player, "deck")
     existing_relics = _extract_existing_player_items(player, "relics")
     existing_potions = _extract_existing_player_items(player, "potions")
-    
-    # 更新 character 字段 - 兼容 character / character_id
+
     has_character = "character" in player
     has_character_id = "character_id" in player
-    
+
     if has_character and has_character_id:
-        # 两者都存在，都更新
         updated_player["character"] = character
         updated_player["character_id"] = character
     elif has_character:
-        # 只有 character
         updated_player["character"] = character
     elif has_character_id:
-        # 只有 character_id
         updated_player["character_id"] = character
     else:
-        # 都不存在，默认写入 character
         updated_player["character"] = character
-    
-    # 更新其他字段
+
     updated_player["max_potion_slot_count"] = max_potion_slot_count
-    
-    # 保守更新 deck：只在原值是 list 或新 ID 非空时才重建
-    if isinstance(player.get("deck"), list) or deck_ids:
-        updated_player["deck"] = _rebuild_run_item_list(existing_deck, deck_ids, item_kind="deck")
-    
-    # 保守更新 relics：只在原值是 list 或新 ID 非空时才重建
-    if isinstance(player.get("relics"), list) or relic_ids:
-        updated_player["relics"] = _rebuild_run_item_list(existing_relics, relic_ids, item_kind="relics")
-    
-    # 保守更新 potions：只在原值是 list 或新 ID 非空时才重建
-    if isinstance(player.get("potions"), list) or potion_ids:
-        updated_player["potions"] = _rebuild_run_item_list(existing_potions, potion_ids, item_kind="potions")
-    
-    # 更新 players 列表
+
+    normalized_deck_ids = [item for item in (deck_ids or []) if item]
+    normalized_relic_ids = [item for item in (relic_ids or []) if item]
+    normalized_potion_ids = [item for item in (potion_ids or []) if item]
+
+    if deck_items is not None:
+        if isinstance(player.get("deck"), list) or deck_items:
+            updated_player["deck"] = normalize_run_item_list(list(deck_items), item_kind="deck")
+    elif isinstance(player.get("deck"), list) or normalized_deck_ids:
+        updated_player["deck"] = _rebuild_run_item_list(existing_deck, normalized_deck_ids, item_kind="deck")
+
+    if relic_items is not None:
+        if isinstance(player.get("relics"), list) or relic_items:
+            updated_player["relics"] = normalize_run_item_list(list(relic_items), item_kind="relics")
+    elif isinstance(player.get("relics"), list) or normalized_relic_ids:
+        updated_player["relics"] = _rebuild_run_item_list(existing_relics, normalized_relic_ids, item_kind="relics")
+
+    if potion_items is not None:
+        if isinstance(player.get("potions"), list) or potion_items:
+            updated_player["potions"] = normalize_run_item_list(list(potion_items), item_kind="potions")
+    elif isinstance(player.get("potions"), list) or normalized_potion_ids:
+        updated_player["potions"] = _rebuild_run_item_list(existing_potions, normalized_potion_ids, item_kind="potions")
+
     updated_players[player_index] = updated_player
     updated["players"] = updated_players
-    
     return updated
 
 
