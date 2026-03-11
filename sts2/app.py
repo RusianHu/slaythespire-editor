@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +32,7 @@ from .structured import (
 )
 from .localization import set_runtime_pck_path_override
 from .path_manager import (
+    STS2_STEAM_APP_ID,
     ResolvedExternalPath,
     build_external_path_status_text,
     resolve_sts2_pck_path,
@@ -40,6 +43,7 @@ from .path_manager import (
     detect_sts2_pck_paths,
 )
 from .path_settings_dialog import StS2PathSettingsDialog
+from .live_verify import detect_sts2_process_running
 
 WINDOW_TITLE = "杀戮尖塔 2 存档修改器"
 STATUS_READY = "就绪"
@@ -111,6 +115,9 @@ class StS2MainFrame(wx.Frame):
         save_item = file_menu.Append(wx.ID_ANY, "保存当前文件(&S)")
         self.Bind(wx.EVT_MENU, self.on_save_current_file, save_item)
 
+        restart_game_item = file_menu.Append(wx.ID_ANY, "一键重启游戏(&G)")
+        self.Bind(wx.EVT_MENU, self.on_restart_game, restart_game_item)
+
         file_menu.AppendSeparator()
         exit_item = file_menu.Append(wx.ID_EXIT, "退出(&X)")
         self.Bind(wx.EVT_MENU, self.on_exit, exit_item)
@@ -150,6 +157,7 @@ class StS2MainFrame(wx.Frame):
         self.refresh_button = wx.Button(panel, wx.ID_ANY, "刷新")
         self.reload_button = wx.Button(panel, wx.ID_ANY, "重载")
         self.save_button = wx.Button(panel, wx.ID_ANY, "保存")
+        self.restart_game_button = wx.Button(panel, wx.ID_ANY, "重启游戏")
         self.choose_save_dir_button = wx.Button(panel, wx.ID_ANY, "选择存档目录")
         self.auto_detect_button = wx.Button(panel, wx.ID_ANY, "自动探测路径")
         self.choose_pck_button = wx.Button(panel, wx.ID_ANY, "选择 PCK")
@@ -159,13 +167,15 @@ class StS2MainFrame(wx.Frame):
         self.refresh_button.Bind(wx.EVT_BUTTON, self.on_refresh_files)
         self.reload_button.Bind(wx.EVT_BUTTON, self.on_reload_current_file)
         self.save_button.Bind(wx.EVT_BUTTON, self.on_save_current_file)
+        self.restart_game_button.Bind(wx.EVT_BUTTON, self.on_restart_game)
         self.choose_save_dir_button.Bind(wx.EVT_BUTTON, self.on_choose_save_dir)
         self.auto_detect_button.Bind(wx.EVT_BUTTON, self.on_auto_detect_all_paths)
         self.choose_pck_button.Bind(wx.EVT_BUTTON, self.on_choose_pck_file)
 
         toolbar.Add(self.refresh_button, 0, wx.RIGHT, 8)
         toolbar.Add(self.reload_button, 0, wx.RIGHT, 8)
-        toolbar.Add(self.save_button, 0, wx.RIGHT, 16)
+        toolbar.Add(self.save_button, 0, wx.RIGHT, 8)
+        toolbar.Add(self.restart_game_button, 0, wx.RIGHT, 16)
         toolbar.Add(self.choose_save_dir_button, 0, wx.RIGHT, 8)
         toolbar.Add(self.auto_detect_button, 0, wx.RIGHT, 8)
         toolbar.Add(self.choose_pck_button, 0)
@@ -1915,6 +1925,101 @@ class StS2MainFrame(wx.Frame):
         except json.JSONDecodeError as exc:
             raise SaveValidationError(f"当前编辑内容不是合法 JSON：第 {exc.lineno} 行，第 {exc.colno} 列") from exc
 
+    def _current_file_supports_structured_edit(self) -> bool:
+        return (
+            self.current_info is not None
+            and self.current_info.kind in (
+                SaveFileKind.RUN_HISTORY,
+                SaveFileKind.CURRENT_RUN,
+                SaveFileKind.PROGRESS,
+                SaveFileKind.PREFS,
+            )
+        )
+
+    def _build_data_from_structured_editor(self) -> tuple[Any, int]:
+        """根据当前结构化编辑区控件生成 JSON 投影，但不直接写回文件。"""
+        info = self.current_info
+        if info is None or not self._current_file_supports_structured_edit():
+            raise SaveValidationError("当前文件不支持结构化编辑")
+
+        if info.kind in (SaveFileKind.RUN_HISTORY, SaveFileKind.CURRENT_RUN):
+            ascension = self._read_spin_ctrl_int(self.run_ascension_ctrl, 0)
+            seed = self.run_seed_ctrl.GetValue()
+            game_mode = self.run_game_mode_ctrl.GetValue()
+
+            win_choice = self.run_win_choice.GetSelection()
+            if win_choice == 0:
+                win = None
+            elif win_choice == 1:
+                win = True
+            else:
+                win = False
+
+            updated_data = apply_run_basic_fields(
+                self.current_data,
+                ascension=ascension,
+                seed=seed,
+                game_mode=game_mode,
+                win=win,
+            )
+
+            selected_player = self.run_player_choice.GetSelection() if hasattr(self, "run_player_choice") else wx.NOT_FOUND
+            if selected_player != wx.NOT_FOUND:
+                self._sync_all_run_items_from_editor_text()
+                character = self.run_character_ctrl.GetValue().strip()
+                max_potion_slot_count = self._read_spin_ctrl_int(self.run_max_potion_slots_ctrl, 0)
+
+                updated_data = apply_run_player_fields(
+                    updated_data,
+                    player_index=selected_player,
+                    character=character,
+                    max_potion_slot_count=max_potion_slot_count,
+                    deck_items=self.run_deck_items,
+                    relic_items=self.run_relic_items,
+                    potion_items=self.run_potion_items,
+                )
+
+            return updated_data, selected_player
+
+        if info.kind is SaveFileKind.PROGRESS:
+            current_score = self._read_spin_ctrl_int(self.progress_current_score_ctrl, 0)
+            floors_climbed = self._read_spin_ctrl_int(self.progress_floors_climbed_ctrl, 0)
+            total_playtime = self._read_spin_ctrl_int(self.progress_total_playtime_ctrl, 0)
+            total_unlocks = self._read_spin_ctrl_int(self.progress_total_unlocks_ctrl, 0)
+            pending_character_unlock = self.progress_pending_character_unlock_ctrl.GetValue().strip()
+
+            updated_data = apply_progress_basic_fields(
+                self.current_data,
+                current_score=current_score,
+                floors_climbed=floors_climbed,
+                total_playtime=total_playtime,
+                total_unlocks=total_unlocks,
+                pending_character_unlock=pending_character_unlock,
+            )
+            return updated_data, wx.NOT_FOUND
+
+        fast_mode = self.prefs_fast_mode_ctrl.GetValue().strip()
+        screenshake = self._read_spin_ctrl_int(self.prefs_screenshake_ctrl, 0)
+        long_press = self.prefs_long_press_ctrl.GetValue()
+        mute_in_background = self.prefs_mute_in_background_ctrl.GetValue()
+        show_card_indices = self.prefs_show_card_indices_ctrl.GetValue()
+        show_run_timer = self.prefs_show_run_timer_ctrl.GetValue()
+        text_effects_enabled = self.prefs_text_effects_enabled_ctrl.GetValue()
+        upload_data = self.prefs_upload_data_ctrl.GetValue()
+
+        updated_data = apply_prefs_basic_fields(
+            self.current_data,
+            fast_mode=fast_mode,
+            screenshake=screenshake,
+            long_press=long_press,
+            mute_in_background=mute_in_background,
+            show_card_indices=show_card_indices,
+            show_run_timer=show_run_timer,
+            text_effects_enabled=text_effects_enabled,
+            upload_data=upload_data,
+        )
+        return updated_data, wx.NOT_FOUND
+
     def on_select_file(self, event: wx.CommandEvent) -> None:
         self.load_file_by_index(event.GetSelection())
 
@@ -1942,122 +2047,113 @@ class StS2MainFrame(wx.Frame):
         self._update_current_views(loaded_info, data)
 
     def on_save_current_file(self, event: wx.CommandEvent | None) -> None:
-        if self.current_info is None:
+        current_info = self.current_info
+        if current_info is None:
             self.SetStatusText("当前没有可保存的文件")
             return
 
+        structured_data: Any | None = None
+        structured_data_available = False
+        if self._current_file_supports_structured_edit():
+            try:
+                structured_data, _ = self._build_data_from_structured_editor()
+                structured_data_available = True
+            except Exception:
+                structured_data = None
+                structured_data_available = False
+
+        editor_data: Any | None = None
+        editor_error: SaveValidationError | None = None
         try:
-            data = self.parse_editor_json()
-            backup_path = self.save_io.write_json_file(self.current_info.path, data, create_backup=True)
+            editor_data = self.parse_editor_json()
+        except SaveValidationError as exc:
+            editor_error = exc
+
+        used_structured_sync = False
+
+        if editor_error is not None:
+            if not structured_data_available:
+                wx.MessageBox(str(editor_error), "保存失败", wx.OK | wx.ICON_ERROR)
+                self.SetStatusText(f"保存失败：{editor_error}")
+                return
+
+            dialog = wx.MessageDialog(
+                self,
+                f"{editor_error}\n\n当前“JSON 编辑”页不是合法 JSON，无法按 JSON 内容直接保存。\n\n是否改为按“结构化编辑”页当前内容同步到 JSON 并保存？\n如果你刚刚修改的是结构化编辑区，这通常就是你想要的操作。",
+                "保存前确认",
+                wx.YES_NO | wx.NO_DEFAULT | wx.ICON_WARNING,
+            )
+            try:
+                result = dialog.ShowModal()
+            finally:
+                dialog.Destroy()
+
+            if result != wx.ID_YES:
+                self.SetStatusText("已取消保存")
+                return
+
+            data_to_save = structured_data
+            used_structured_sync = True
+        else:
+            data_to_save = editor_data
+            if structured_data_available and structured_data != editor_data:
+                dialog = wx.MessageDialog(
+                    self,
+                    "检测到“结构化编辑”页与“JSON 编辑”页内容不一致。\n\n如果直接保存，写入文件的将是“JSON 编辑”页当前内容，结构化编辑区刚刚改的内容不会自动生效。\n\n选择“是”：先将结构化修改同步到 JSON，再保存。\n选择“否”：仅保存当前 JSON 编辑区内容。\n选择“取消”：放弃本次保存。",
+                    "保存前确认",
+                    wx.YES_NO | wx.CANCEL | wx.CANCEL_DEFAULT | wx.ICON_QUESTION,
+                )
+                try:
+                    result = dialog.ShowModal()
+                finally:
+                    dialog.Destroy()
+
+                if result == wx.ID_YES:
+                    data_to_save = structured_data
+                    used_structured_sync = True
+                elif result == wx.ID_NO:
+                    data_to_save = editor_data
+                else:
+                    self.SetStatusText("已取消保存")
+                    return
+
+        try:
+            backup_path = self.save_io.write_json_file(current_info.path, data_to_save, create_backup=True)
         except SaveIOError as exc:
             wx.MessageBox(str(exc), "保存失败", wx.OK | wx.ICON_ERROR)
             self.SetStatusText(f"保存失败：{exc}")
             return
 
-        self._update_current_views(self.current_info, data)
+        self._update_current_views(current_info, data_to_save)
 
         backup_hint = f"，备份：{backup_path.name}" if backup_path else ""
-        self.SetStatusText(f"已保存：{self.current_info.path.name}{backup_hint}")
-        wx.MessageBox(
-            f"保存成功。\n\n文件：{self.current_info.path}\n备份：{backup_path}",
-            "保存成功",
-            wx.OK | wx.ICON_INFORMATION,
+        self.SetStatusText(f"已保存：{current_info.path.name}{backup_hint}；请重启游戏后再读取修改后的存档")
+        self._prompt_restart_after_save(
+            current_path=current_info.path,
+            backup_path=backup_path,
+            used_structured_sync=used_structured_sync,
         )
 
     def on_apply_structured_edits(self, event: wx.CommandEvent | None) -> None:
         """Apply structured edits to current JSON data."""
-        if self.current_info is None:
+        current_info = self.current_info
+        if current_info is None:
             self.SetStatusText("当前文件不支持结构化编辑")
             return
 
-        if self.current_info.kind not in (SaveFileKind.RUN_HISTORY, SaveFileKind.CURRENT_RUN, SaveFileKind.PROGRESS, SaveFileKind.PREFS):
+        if not self._current_file_supports_structured_edit():
             self.SetStatusText("当前文件不支持结构化编辑")
             return
 
         try:
-            if self.current_info.kind in (SaveFileKind.RUN_HISTORY, SaveFileKind.CURRENT_RUN):
-                ascension = self._read_spin_ctrl_int(self.run_ascension_ctrl, 0)
-                seed = self.run_seed_ctrl.GetValue()
-                game_mode = self.run_game_mode_ctrl.GetValue()
+            updated_data, selected_player = self._build_data_from_structured_editor()
+            self._update_current_views(current_info, updated_data)
 
-                win_choice = self.run_win_choice.GetSelection()
-                if win_choice == 0:
-                    win = None
-                elif win_choice == 1:
-                    win = True
-                else:
-                    win = False
-
-                updated_data = apply_run_basic_fields(
-                    self.current_data,
-                    ascension=ascension,
-                    seed=seed,
-                    game_mode=game_mode,
-                    win=win,
-                )
-
-                selected_player = self.run_player_choice.GetSelection() if hasattr(self, "run_player_choice") else wx.NOT_FOUND
-                if selected_player != wx.NOT_FOUND:
-                    self._sync_all_run_items_from_editor_text()
-                    character = self.run_character_ctrl.GetValue().strip()
-                    max_potion_slot_count = self._read_spin_ctrl_int(self.run_max_potion_slots_ctrl, 0)
-
-                    updated_data = apply_run_player_fields(
-                        updated_data,
-                        player_index=selected_player,
-                        character=character,
-                        max_potion_slot_count=max_potion_slot_count,
-                        deck_items=self.run_deck_items,
-                        relic_items=self.run_relic_items,
-                        potion_items=self.run_potion_items,
-                    )
-
-                self._update_current_views(self.current_info, updated_data)
-
+            if current_info.kind in (SaveFileKind.RUN_HISTORY, SaveFileKind.CURRENT_RUN):
                 if selected_player != wx.NOT_FOUND and hasattr(self, "run_player_choice"):
                     if selected_player < self.run_player_choice.GetCount():
                         self.run_player_choice.SetSelection(selected_player)
                         self._load_selected_run_player_fields()
-
-            elif self.current_info.kind is SaveFileKind.PROGRESS:
-                current_score = self._read_spin_ctrl_int(self.progress_current_score_ctrl, 0)
-                floors_climbed = self._read_spin_ctrl_int(self.progress_floors_climbed_ctrl, 0)
-                total_playtime = self._read_spin_ctrl_int(self.progress_total_playtime_ctrl, 0)
-                total_unlocks = self._read_spin_ctrl_int(self.progress_total_unlocks_ctrl, 0)
-                pending_character_unlock = self.progress_pending_character_unlock_ctrl.GetValue().strip()
-
-                updated_data = apply_progress_basic_fields(
-                    self.current_data,
-                    current_score=current_score,
-                    floors_climbed=floors_climbed,
-                    total_playtime=total_playtime,
-                    total_unlocks=total_unlocks,
-                    pending_character_unlock=pending_character_unlock,
-                )
-                self._update_current_views(self.current_info, updated_data)
-
-            else:
-                fast_mode = self.prefs_fast_mode_ctrl.GetValue().strip()
-                screenshake = self._read_spin_ctrl_int(self.prefs_screenshake_ctrl, 0)
-                long_press = self.prefs_long_press_ctrl.GetValue()
-                mute_in_background = self.prefs_mute_in_background_ctrl.GetValue()
-                show_card_indices = self.prefs_show_card_indices_ctrl.GetValue()
-                show_run_timer = self.prefs_show_run_timer_ctrl.GetValue()
-                text_effects_enabled = self.prefs_text_effects_enabled_ctrl.GetValue()
-                upload_data = self.prefs_upload_data_ctrl.GetValue()
-
-                updated_data = apply_prefs_basic_fields(
-                    self.current_data,
-                    fast_mode=fast_mode,
-                    screenshake=screenshake,
-                    long_press=long_press,
-                    mute_in_background=mute_in_background,
-                    show_card_indices=show_card_indices,
-                    show_run_timer=show_run_timer,
-                    text_effects_enabled=text_effects_enabled,
-                    upload_data=upload_data,
-                )
-                self._update_current_views(self.current_info, updated_data)
 
             self.notebook.SetSelection(2)
             self.SetStatusText("已将结构化修改同步到当前 JSON（尚未保存到文件）")
@@ -2066,6 +2162,120 @@ class StS2MainFrame(wx.Frame):
             wx.MessageBox(str(exc), "结构化修改失败", wx.OK | wx.ICON_ERROR)
             self.SetStatusText(f"结构化修改失败：{exc}")
             return
+
+    @staticmethod
+    def _build_sts2_steam_uri() -> str:
+        return f"steam://rungameid/{STS2_STEAM_APP_ID}"
+
+    def _restart_game_via_steam(self) -> tuple[bool, str]:
+        was_running = detect_sts2_process_running()
+
+        if was_running:
+            try:
+                result = subprocess.run(
+                    ["taskkill", "/F", "/IM", "SlayTheSpire2.exe"],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="ignore",
+                    timeout=15,
+                    check=False,
+                )
+            except Exception as exc:
+                return False, f"关闭《杀戮尖塔 2》进程失败：{exc}"
+
+            if result.returncode != 0 and detect_sts2_process_running():
+                detail = (result.stdout or result.stderr or "").strip()
+                if not detail:
+                    detail = f"taskkill 返回码 {result.returncode}"
+                return False, f"关闭《杀戮尖塔 2》进程失败：{detail}"
+
+        try:
+            os.startfile(self._build_sts2_steam_uri())
+        except Exception as exc:
+            return False, f"通过 Steam 启动《杀戮尖塔 2》失败：{exc}"
+
+        if was_running:
+            return True, "已关闭游戏进程，并已通过 Steam 发起重启请求。"
+        return True, "当前未检测到游戏进程，已通过 Steam 发起启动请求。"
+
+    def _perform_restart_game_action(self) -> bool:
+        ok, message = self._restart_game_via_steam()
+        if ok:
+            wx.MessageBox(message, "已发起操作", wx.OK | wx.ICON_INFORMATION)
+        else:
+            wx.MessageBox(message, "重启失败", wx.OK | wx.ICON_ERROR)
+        self.SetStatusText(message)
+        return ok
+
+    def _prompt_restart_after_save(
+        self,
+        *,
+        current_path: Path,
+        backup_path: Path | None,
+        used_structured_sync: bool,
+    ) -> None:
+        success_text = "保存成功。"
+        if used_structured_sync:
+            success_text = "已先将结构化修改同步到 JSON，再保存成功。"
+
+        backup_text = str(backup_path) if backup_path else "无"
+        game_running = detect_sts2_process_running()
+        if game_running:
+            restart_text = (
+                "注意：修改后的存档通常不会被当前游戏进程热更新读取。\n"
+                "请重启游戏后再继续，否则你可能会看到“什么都没变”。\n\n"
+                "是否现在一键重启《杀戮尖塔 2》？"
+            )
+        else:
+            restart_text = (
+                "注意：修改后的存档需要在重新启动游戏后才会被读取。\n"
+                "如果不重新启动游戏，你之后可能会误以为修改没有生效。\n\n"
+                "是否现在通过 Steam 启动《杀戮尖塔 2》？"
+            )
+
+        dialog = wx.MessageDialog(
+            self,
+            f"{success_text}\n\n文件：{current_path}\n备份：{backup_text}\n\n{restart_text}",
+            "保存成功",
+            wx.YES_NO | wx.NO_DEFAULT | wx.ICON_INFORMATION,
+        )
+        try:
+            result = dialog.ShowModal()
+        finally:
+            dialog.Destroy()
+
+        if result == wx.ID_YES:
+            self._perform_restart_game_action()
+        else:
+            self.SetStatusText(f"已保存：{current_path.name}；请重启游戏后再读取修改后的存档")
+
+    def on_restart_game(self, event: wx.CommandEvent | None) -> None:
+        game_running = detect_sts2_process_running()
+        if game_running:
+            message = (
+                "将强制关闭正在运行的《杀戮尖塔 2》，并通过 Steam 重新启动。\n\n"
+                "请确认游戏内需要保留的内容已经正常保存，否则可能丢失当前进程中的未保存状态。\n\n"
+                "是否继续？"
+            )
+            title = "一键重启游戏"
+            style = wx.YES_NO | wx.NO_DEFAULT | wx.ICON_WARNING
+        else:
+            message = "当前未检测到《杀戮尖塔 2》进程。\n\n是否现在通过 Steam 启动游戏？"
+            title = "启动游戏"
+            style = wx.YES_NO | wx.NO_DEFAULT | wx.ICON_QUESTION
+
+        dialog = wx.MessageDialog(self, message, title, style)
+        try:
+            result = dialog.ShowModal()
+        finally:
+            dialog.Destroy()
+
+        if result != wx.ID_YES:
+            self.SetStatusText("已取消启动/重启游戏")
+            return
+
+        self._perform_restart_game_action()
 
     def on_exit(self, event: wx.CommandEvent | None) -> None:
         self.Close()
