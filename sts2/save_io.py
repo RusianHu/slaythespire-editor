@@ -9,6 +9,11 @@ from pathlib import Path
 from typing import Any
 
 from .models import SaveFileInfo, SaveFileKind
+from .path_manager import (
+    build_missing_save_dir_help_text,
+    resolve_sts2_save_dir,
+    validate_sts2_save_dir,
+)
 
 
 class SaveIOError(Exception):
@@ -19,10 +24,8 @@ class SaveValidationError(SaveIOError):
     """存档结构或路径不满足预期。"""
 
 
-DEFAULT_STS2_INSTALL_DIR = Path(r"D:\SteamLibrary\steamapps\common\Slay the Spire 2")
-DEFAULT_STS2_PROFILE_SAVE_DIR = Path(
-    r"C:\Program Files (x86)\Steam\userdata\323507751\2868840\remote\profile1\saves"
-)
+DEFAULT_STS2_INSTALL_DIR = Path(r"C:\Program Files (x86)\Steam\steamapps\common\Slay the Spire 2")
+DEFAULT_STS2_PROFILE_SAVE_DIR = Path(r"C:\Program Files (x86)\Steam\userdata")
 
 JSON_INDENT = 2
 JSON_ENCODING = "utf-8"
@@ -32,14 +35,41 @@ class StS2SaveIO:
     """负责《杀戮尖塔 2》JSON 存档文件的发现、读取、备份和安全写回。"""
 
     def __init__(self, save_dir: str | Path | None = None):
-        self.save_dir = Path(save_dir).expanduser().resolve() if save_dir else DEFAULT_STS2_PROFILE_SAVE_DIR
+        result = resolve_sts2_save_dir(save_dir)
+        self.save_dir = result.path
+        self.save_dir_source = result.source
+        self.save_dir_candidates = result.candidates
+
+    def set_save_dir(self, save_dir: str | Path | None) -> Path | None:
+        """设置存档目录并更新相关属性。"""
+        result = resolve_sts2_save_dir(save_dir)
+        self.save_dir = result.path
+        self.save_dir_source = result.source
+        self.save_dir_candidates = result.candidates
+        return self.save_dir
 
     def ensure_save_dir(self) -> Path:
-        if not self.save_dir.exists():
-            raise SaveValidationError(f"2 代存档目录不存在：{self.save_dir}")
-        if not self.save_dir.is_dir():
-            raise SaveValidationError(f"2 代存档路径不是目录：{self.save_dir}")
-        return self.save_dir
+        validation = validate_sts2_save_dir(self.save_dir)
+        
+        if not validation.ok:
+            # 组合友好的异常信息
+            error_message = validation.message
+            
+            if validation.details:
+                error_message += "\n" + "\n".join(validation.details)
+            else:
+                # 如果没有 details，回退拼接帮助文本
+                help_text = build_missing_save_dir_help_text()
+                error_message += "\n\n" + help_text
+            
+            raise SaveValidationError(error_message)
+        
+        # 校验成功，更新为规范化路径
+        if validation.normalized_path is not None:
+            self.save_dir = validation.normalized_path
+            return validation.normalized_path
+        else:
+            raise SaveValidationError("2 代存档目录解析失败：校验通过但未返回规范化路径")
 
     def detect_kind(self, path: str | Path) -> SaveFileKind:
         file_path = Path(path)
@@ -107,8 +137,9 @@ class StS2SaveIO:
 
         # 尝试从当前 save_dir 提取 profile 名
         profile_name = None
-        if self.save_dir.name.lower() == "saves":
-            profile_name = self.save_dir.parent.name
+        current_save_dir = self.save_dir if isinstance(self.save_dir, Path) else None
+        if current_save_dir and current_save_dir.name.lower() == "saves":
+            profile_name = current_save_dir.parent.name
 
         # 递归搜索所有 current_run.save.backup 文件
         backup_files = list(steam_root.rglob("current_run.save.backup"))

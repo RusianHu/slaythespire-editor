@@ -6,11 +6,14 @@ from pathlib import Path
 
 from sts2 import StS2SaveIO
 from sts2.localization import (
-    DEFAULT_STS2_PCK_PATH,
     build_localization_probe_text,
     probe_localization_from_pck,
     build_common_localization_indexes_from_pck,
     build_localization_index_preview_text,
+)
+from sts2.path_manager import (
+    build_external_path_status_text,
+    resolve_sts2_pck_path,
 )
 from sts2.live_verify import (
     cli_current_run_probe,
@@ -60,19 +63,19 @@ def cli_preview(save_dir: str | Path | None = None) -> int:
 def cli_localization_preview(pck_path: str | Path | None = None) -> int:
     """CLI PCK 本地化预览模式：探测并显示本地化路径"""
     try:
-        # 如果传入了 pck_path，则使用它；否则使用 DEFAULT_STS2_PCK_PATH
-        actual_pck_path = pck_path if pck_path else DEFAULT_STS2_PCK_PATH
-        print(f"使用 PCK 文件：{actual_pck_path}")
+        # 解析 PCK 路径（支持自动探测与配置回退）
+        resolved = resolve_sts2_pck_path(pck_path)
+        print(build_external_path_status_text(label="PCK 文件", resolved=resolved, optional=False))
         
-        # 调用探测函数
-        probe_result = probe_localization_from_pck(actual_pck_path)
+        # 调用探测函数（使用原始 pck_path，让底层自行处理）
+        probe_result = probe_localization_from_pck(pck_path)
         
         # 构建并打印结果文本
         result_text = build_localization_probe_text(probe_result)
         print(result_text)
         
-        # 构建并打印 zhs 本地化索引样本
-        indexes = build_common_localization_indexes_from_pck(actual_pck_path, locale="zhs")
+        # 构建并打印 zhs 本地化索引样本（使用原始 pck_path）
+        indexes = build_common_localization_indexes_from_pck(pck_path, locale="zhs")
         if indexes:
             index_preview_text = build_localization_index_preview_text(indexes)
             print(index_preview_text)
@@ -278,7 +281,7 @@ def main() -> int:
     else:
         # 默认启动 GUI
         from sts2.app import run_sts2_app
-        return run_sts2_app(save_dir=args.save_dir)
+        return run_sts2_app(save_dir=args.save_dir, pck_path=args.pck_path)
 
 
 if __name__ == "__main__":

@@ -21,7 +21,20 @@ from .structured import (
     format_localized_id_text,
     build_localized_preview_text,
     search_localized_ids,
+    clear_localization_runtime_cache,
 )
+from .localization import set_runtime_pck_path_override
+from .path_manager import (
+    ResolvedExternalPath,
+    build_external_path_status_text,
+    resolve_sts2_pck_path,
+    update_sts2_path_config,
+    validate_sts2_save_dir,
+    validate_sts2_pck_path,
+    detect_sts2_save_dirs,
+    detect_sts2_pck_paths,
+)
+from .path_settings_dialog import StS2PathSettingsDialog
 
 WINDOW_TITLE = "杀戮尖塔 2 存档修改器"
 STATUS_READY = "就绪"
@@ -42,12 +55,22 @@ def summarize_json(data: Any) -> str:
 
 
 class StS2MainFrame(wx.Frame):
-    def __init__(self, parent: wx.Window | None, save_dir: str | Path | None = None):
+    def __init__(self, parent: wx.Window | None, save_dir: str | Path | None = None, pck_path: str | Path | None = None):
         self.save_io = StS2SaveIO(save_dir=save_dir)
+        resolved_pck = resolve_sts2_pck_path(pck_path)
+        self.pck_path = resolved_pck.path
+        self.pck_path_source = resolved_pck.source
+        self.pck_path_candidates = resolved_pck.candidates
+        if self.pck_path is not None:
+            set_runtime_pck_path_override(self.pck_path)
+        else:
+            set_runtime_pck_path_override(None)
+        clear_localization_runtime_cache()
         self.file_infos: list[SaveFileInfo] = []
         self.current_info: SaveFileInfo | None = None
         self.current_data: Any = None
         self._layout_refresh_pending = False
+        self.path_status_hint = ""
 
         super().__init__(
             parent=parent,
@@ -63,6 +86,7 @@ class StS2MainFrame(wx.Frame):
         self.Bind(wx.EVT_SIZE, self.on_frame_size)
         self.CreateStatusBar()
         self.SetStatusText(STATUS_READY)
+        self._refresh_path_status_labels()
 
     def _build_menu_bar(self) -> None:
         menu_bar = wx.MenuBar()
@@ -82,6 +106,29 @@ class StS2MainFrame(wx.Frame):
         self.Bind(wx.EVT_MENU, self.on_exit, exit_item)
 
         menu_bar.Append(file_menu, "文件(&F)")
+
+        path_menu = wx.Menu()
+
+        open_path_settings_item = path_menu.Append(wx.ID_ANY, "路径设置(&M)...")
+        self.Bind(wx.EVT_MENU, self.on_open_path_settings_dialog, open_path_settings_item)
+        path_menu.AppendSeparator()
+
+        choose_save_dir_item = path_menu.Append(wx.ID_ANY, "选择存档目录(&S)...")
+        self.Bind(wx.EVT_MENU, self.on_choose_save_dir, choose_save_dir_item)
+
+        auto_detect_save_dir_item = path_menu.Append(wx.ID_ANY, "自动探测存档目录(&D)")
+        self.Bind(wx.EVT_MENU, self.on_auto_detect_save_dir, auto_detect_save_dir_item)
+
+        path_menu.AppendSeparator()
+
+        choose_pck_item = path_menu.Append(wx.ID_ANY, "选择 PCK 文件(&K)...")
+        self.Bind(wx.EVT_MENU, self.on_choose_pck_file, choose_pck_item)
+
+        auto_detect_pck_item = path_menu.Append(wx.ID_ANY, "自动探测 PCK(&A)")
+        self.Bind(wx.EVT_MENU, self.on_auto_detect_pck, auto_detect_pck_item)
+
+        menu_bar.Append(path_menu, "路径(&P)")
+
         self.SetMenuBar(menu_bar)
 
     def _build_ui(self) -> None:
@@ -93,17 +140,31 @@ class StS2MainFrame(wx.Frame):
         self.refresh_button = wx.Button(panel, wx.ID_ANY, "刷新")
         self.reload_button = wx.Button(panel, wx.ID_ANY, "重载")
         self.save_button = wx.Button(panel, wx.ID_ANY, "保存")
-        self.directory_label = wx.StaticText(panel, wx.ID_ANY, f"存档目录：{self.save_io.save_dir}")
+        self.choose_save_dir_button = wx.Button(panel, wx.ID_ANY, "选择存档目录")
+        self.auto_detect_button = wx.Button(panel, wx.ID_ANY, "自动探测路径")
+        self.choose_pck_button = wx.Button(panel, wx.ID_ANY, "选择 PCK")
+        self.directory_label = wx.StaticText(panel, wx.ID_ANY, "存档目录：未解析")
+        self.pck_label = wx.StaticText(panel, wx.ID_ANY, "PCK 文件：未解析")
 
         self.refresh_button.Bind(wx.EVT_BUTTON, self.on_refresh_files)
         self.reload_button.Bind(wx.EVT_BUTTON, self.on_reload_current_file)
         self.save_button.Bind(wx.EVT_BUTTON, self.on_save_current_file)
+        self.choose_save_dir_button.Bind(wx.EVT_BUTTON, self.on_choose_save_dir)
+        self.auto_detect_button.Bind(wx.EVT_BUTTON, self.on_auto_detect_all_paths)
+        self.choose_pck_button.Bind(wx.EVT_BUTTON, self.on_choose_pck_file)
 
         toolbar.Add(self.refresh_button, 0, wx.RIGHT, 8)
         toolbar.Add(self.reload_button, 0, wx.RIGHT, 8)
         toolbar.Add(self.save_button, 0, wx.RIGHT, 16)
-        toolbar.Add(self.directory_label, 1, wx.ALIGN_CENTER_VERTICAL)
+        toolbar.Add(self.choose_save_dir_button, 0, wx.RIGHT, 8)
+        toolbar.Add(self.auto_detect_button, 0, wx.RIGHT, 8)
+        toolbar.Add(self.choose_pck_button, 0)
         root.Add(toolbar, 0, wx.EXPAND | wx.ALL, 8)
+
+        path_status_sizer = wx.BoxSizer(wx.VERTICAL)
+        path_status_sizer.Add(self.directory_label, 0, wx.BOTTOM, 4)
+        path_status_sizer.Add(self.pck_label, 0)
+        root.Add(path_status_sizer, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
 
         content = wx.BoxSizer(wx.HORIZONTAL)
 
@@ -645,6 +706,258 @@ class StS2MainFrame(wx.Frame):
 
         root.Add(content, 1, wx.EXPAND)
         panel.SetSizer(root)
+
+    def _refresh_path_status_labels(self) -> None:
+        save_resolved = ResolvedExternalPath(
+            path=self.save_io.save_dir,
+            source=getattr(self.save_io, "save_dir_source", "missing"),
+            candidates=getattr(self.save_io, "save_dir_candidates", []),
+        )
+        pck_resolved = ResolvedExternalPath(
+            path=self.pck_path,
+            source=getattr(self, "pck_path_source", "missing"),
+            candidates=getattr(self, "pck_path_candidates", []),
+        )
+
+        save_status = build_external_path_status_text(label="存档目录", resolved=save_resolved, optional=False)
+        pck_status = build_external_path_status_text(label="PCK 文件", resolved=pck_resolved, optional=True)
+
+        save_validation = validate_sts2_save_dir(self.save_io.save_dir)
+        pck_validation = validate_sts2_pck_path(self.pck_path)
+
+        if save_validation.ok and save_validation.warnings:
+            save_status += f" | 警告：{'; '.join(save_validation.warnings)}"
+        if (self.pck_path is not None) and pck_validation.ok and pck_validation.warnings:
+            pck_status += f" | 警告：{'; '.join(pck_validation.warnings)}"
+        if (self.pck_path is None) and self.path_status_hint:
+            pck_status += f" | {self.path_status_hint}"
+
+        self.directory_label.SetLabel(save_status)
+        self.pck_label.SetLabel(pck_status)
+
+    def on_open_path_settings_dialog(self, event: wx.CommandEvent | None) -> None:
+        dialog = StS2PathSettingsDialog(
+            self,
+            save_dir=self.save_io.save_dir,
+            save_dir_source=getattr(self.save_io, "save_dir_source", "missing"),
+            save_dir_candidates=getattr(self.save_io, "save_dir_candidates", []),
+            pck_path=self.pck_path,
+            pck_path_source=getattr(self, "pck_path_source", "missing"),
+            pck_path_candidates=getattr(self, "pck_path_candidates", []),
+        )
+        try:
+            if dialog.ShowModal() != wx.ID_OK:
+                return
+            result = dialog.get_result()
+        finally:
+            dialog.Destroy()
+
+        save_dir = result.get("save_dir")
+        save_dir_source = result.get("save_dir_source")
+        save_dir_candidates = result.get("save_dir_candidates") or []
+        pck_path = result.get("pck_path")
+        pck_path_source = result.get("pck_path_source")
+        pck_path_candidates = result.get("pck_path_candidates") or []
+
+        if save_dir is not None:
+            self._apply_save_dir_change(save_dir, source_hint="已通过路径设置应用存档目录")
+            if isinstance(save_dir_source, str):
+                self.save_io.save_dir_source = save_dir_source
+            if isinstance(save_dir_candidates, list):
+                self.save_io.save_dir_candidates = save_dir_candidates
+
+        if pck_path is not None:
+            self._apply_pck_path_change(pck_path, source_hint="已通过路径设置应用 PCK 文件")
+            if isinstance(pck_path_source, str):
+                self.pck_path_source = pck_path_source
+            if isinstance(pck_path_candidates, list):
+                self.pck_path_candidates = pck_path_candidates
+        else:
+            self._apply_pck_path_change(None, source_hint="已通过路径设置清除 PCK 文件")
+            if isinstance(pck_path_source, str):
+                self.pck_path_source = pck_path_source
+            if isinstance(pck_path_candidates, list):
+                self.pck_path_candidates = pck_path_candidates
+
+        self._refresh_path_status_labels()
+        self.SetStatusText("已应用路径设置")
+
+    def on_auto_detect_all_paths(self, event: wx.CommandEvent | None) -> None:
+        """同时自动探测存档目录与 PCK 文件。"""
+        save_candidates = detect_sts2_save_dirs()
+        pck_candidates = detect_sts2_pck_paths()
+
+        changed_parts: list[str] = []
+
+        if save_candidates:
+            self._apply_save_dir_change(save_candidates[0], source_hint="已自动探测存档目录")
+            self.save_io.save_dir_candidates = save_candidates
+            self.save_io.save_dir_source = "auto"
+            changed_parts.append(f"存档目录：{save_candidates[0]}")
+
+        if pck_candidates:
+            self.pck_path_source = "auto"
+            self.pck_path_candidates = pck_candidates
+            self._apply_pck_path_change(pck_candidates[0], source_hint="已自动探测 PCK 文件")
+            self.pck_path_source = "auto"
+            self.pck_path_candidates = pck_candidates
+            changed_parts.append(f"PCK：{pck_candidates[0]}")
+
+        self._refresh_path_status_labels()
+
+        if changed_parts:
+            self.SetStatusText("已自动探测路径：" + " | ".join(changed_parts))
+            return
+
+        wx.MessageBox(
+            "未自动探测到可用的存档目录或 PCK 文件。",
+            "自动探测失败",
+            wx.OK | wx.ICON_WARNING,
+        )
+        self.SetStatusText("未自动探测到可用的存档目录或 PCK 文件")
+
+    def _apply_save_dir_change(self, save_dir: str | Path | None, *, source_hint: str = "") -> None:
+        """Apply save directory change and refresh UI."""
+        self.save_io.set_save_dir(save_dir)
+        if save_dir is not None:
+            update_sts2_path_config(save_dir=save_dir)
+        # Removed: if source_hint: self.path_status_hint = source_hint
+        # This method should not modify path_status_hint to avoid incorrect PCK status display
+        self._refresh_path_status_labels()
+        self.refresh_file_list(select_first=True)
+        self._queue_layout_refresh()
+
+    def _apply_pck_path_change(self, pck_path: str | Path | None, *, source_hint: str = "") -> None:
+        """Apply PCK path change and refresh UI."""
+        if pck_path is None:
+            self.pck_path = None
+            self.pck_path_source = "missing"
+            self.pck_path_candidates = []
+            set_runtime_pck_path_override(None)
+            if source_hint:
+                self.path_status_hint = source_hint
+        else:
+            normalized_path = Path(pck_path).expanduser().resolve()
+            self.pck_path = normalized_path
+            self.pck_path_source = "explicit"
+            self.pck_path_candidates = []
+            set_runtime_pck_path_override(self.pck_path)
+            update_sts2_path_config(pck_path=self.pck_path)
+            # Clear old missing hints when PCK is successfully set
+            self.path_status_hint = ""
+        
+        clear_localization_runtime_cache()
+        
+        self._refresh_path_status_labels()
+        
+        if self.current_info is not None and self.current_data is not None:
+            self._update_current_views(self.current_info, self.current_data)
+            # Refresh candidate choices after PCK switch
+            self._update_all_run_candidate_choices()
+        else:
+            self._update_run_localized_preview()
+            self._update_progress_localized_preview()
+            self._update_all_run_candidate_choices()
+            self._queue_layout_refresh()
+
+    def on_choose_save_dir(self, event: wx.CommandEvent | None) -> None:
+        """Handle manual save directory selection."""
+        initial_dir = str(self.save_io.save_dir) if self.save_io.save_dir else ""
+        
+        with wx.DirDialog(
+            self,
+            "选择存档目录",
+            defaultPath=initial_dir,
+            style=wx.DD_DEFAULT_STYLE | wx.DD_DIR_MUST_EXIST,
+        ) as dialog:
+            if dialog.ShowModal() != wx.ID_OK:
+                return
+            
+            selected_path = dialog.GetPath()
+        
+        validation = validate_sts2_save_dir(selected_path)
+        if not validation.ok:
+            wx.MessageBox(
+                validation.message + "\n\n" + "\n".join(validation.details),
+                "路径无效",
+                wx.OK | wx.ICON_ERROR,
+            )
+            self.SetStatusText(f"存档目录无效：{validation.message}")
+            return
+        
+        self._apply_save_dir_change(validation.normalized_path, source_hint="已手动选择存档目录")
+        self.SetStatusText("已切换存档目录")
+
+    def on_auto_detect_save_dir(self, event: wx.CommandEvent | None) -> None:
+        """Handle automatic save directory detection."""
+        candidates = detect_sts2_save_dirs()
+        
+        if not candidates:
+            wx.MessageBox(
+                "未自动探测到可用的 2 代存档目录。",
+                "自动探测失败",
+                wx.OK | wx.ICON_WARNING,
+            )
+            self.SetStatusText("未自动探测到可用的存档目录")
+            return
+        
+        self._apply_save_dir_change(candidates[0], source_hint="已自动探测存档目录")
+        self.save_io.save_dir_candidates = candidates
+        self.save_io.save_dir_source = "auto"
+        self._refresh_path_status_labels()
+        self.SetStatusText(f"已自动探测存档目录：{candidates[0]}")
+
+    def on_choose_pck_file(self, event: wx.CommandEvent | None) -> None:
+        """Handle manual PCK file selection."""
+        initial_dir = ""
+        if self.pck_path is not None:
+            initial_dir = str(self.pck_path.parent)
+        
+        with wx.FileDialog(
+            self,
+            "选择 PCK 文件",
+            defaultDir=initial_dir,
+            wildcard="PCK 文件 (*.pck)|*.pck|所有文件 (*.*)|*.*",
+            style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST,
+        ) as dialog:
+            if dialog.ShowModal() != wx.ID_OK:
+                return
+            
+            selected_path = dialog.GetPath()
+        
+        validation = validate_sts2_pck_path(selected_path)
+        if not validation.ok:
+            wx.MessageBox(
+                validation.message + "\n\n" + "\n".join(validation.details),
+                "PCK 路径无效",
+                wx.OK | wx.ICON_ERROR,
+            )
+            self.SetStatusText(f"PCK 路径无效：{validation.message}")
+            return
+        
+        self._apply_pck_path_change(validation.normalized_path, source_hint="已手动选择 PCK 文件")
+        self.SetStatusText("已切换 PCK 文件")
+
+    def on_auto_detect_pck(self, event: wx.CommandEvent | None) -> None:
+        """Handle automatic PCK detection."""
+        candidates = detect_sts2_pck_paths()
+        
+        if not candidates:
+            wx.MessageBox(
+                "未自动探测到 SlayTheSpire2.pck。",
+                "自动探测失败",
+                wx.OK | wx.ICON_WARNING,
+            )
+            self.SetStatusText("未自动探测到 PCK 文件")
+            return
+        
+        self.pck_path_source = "auto"
+        self.pck_path_candidates = candidates
+        self._apply_pck_path_change(candidates[0], source_hint="已自动探测 PCK 文件")
+        self.pck_path_source = "auto"
+        self.pck_path_candidates = candidates
+        self._refresh_path_status_labels()
+        self.SetStatusText(f"已自动探测 PCK：{candidates[0]}")
 
     def initialize_after_show(self) -> None:
         """Defer initial data loading until the frame is visible."""
@@ -1193,7 +1506,7 @@ class StS2MainFrame(wx.Frame):
 
         labels = [self._format_file_list_label(info) for info in self.file_infos]
         self.file_list.Set(labels)
-        self.directory_label.SetLabel(f"存档目录：{self.save_io.save_dir}")
+        self._refresh_path_status_labels()
         self._queue_layout_refresh()
 
         if not self.file_infos:
@@ -1721,20 +2034,21 @@ class StS2MainFrame(wx.Frame):
 
 
 class StS2App(wx.App):
-    def __init__(self, save_dir: str | Path | None = None):
+    def __init__(self, save_dir: str | Path | None = None, pck_path: str | Path | None = None):
         self.save_dir = save_dir
+        self.pck_path = pck_path
         super().__init__(redirect=False)
 
     def OnInit(self) -> bool:
-        self.frame = StS2MainFrame(None, save_dir=self.save_dir)
+        self.frame = StS2MainFrame(None, save_dir=self.save_dir, pck_path=self.pck_path)
         self.SetTopWindow(self.frame)
         self.frame.Show()
         wx.CallAfter(self.frame.initialize_after_show)
         return True
 
 
-def run_sts2_app(save_dir: str | Path | None = None) -> int:
-    app = StS2App(save_dir=save_dir)
+def run_sts2_app(save_dir: str | Path | None = None, pck_path: str | Path | None = None) -> int:
+    app = StS2App(save_dir=save_dir, pck_path=pck_path)
     app.MainLoop()
     return 0
 

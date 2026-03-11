@@ -14,7 +14,7 @@ from .models import (
     SaveFileInfo,
     SaveFileKind,
 )
-from .localization import build_common_localization_indexes_from_pck
+from .localization import build_common_localization_indexes_from_pck, get_effective_pck_cache_key
 
 
 def _as_int(value: Any) -> int | None:
@@ -26,11 +26,44 @@ def _as_str(value: Any) -> str | None:
 
 
 @lru_cache(maxsize=4)
-def _get_common_localization_indexes(locale: str = "zhs") -> dict[str, dict[str, str]]:
+def _get_common_localization_indexes_cached(locale: str, pck_cache_key: str) -> dict[str, dict[str, str]]:
+    """
+    真正被 lru_cache 修饰的本地化索引获取函数。
+    
+    Args:
+        locale: 语言代码
+        pck_cache_key: PCK 缓存键（用于区分不同 PCK 路径）
+    
+    Returns:
+        本地化索引字典
+    """
     try:
         return build_common_localization_indexes_from_pck(locale=locale)
     except Exception:
         return {}
+
+
+def _get_common_localization_indexes(locale: str = "zhs") -> dict[str, dict[str, str]]:
+    """
+    获取本地化索引的包装函数，自动读取当前有效 PCK 缓存键。
+    
+    Args:
+        locale: 语言代码，默认 "zhs"
+    
+    Returns:
+        本地化索引字典
+    """
+    pck_cache_key = get_effective_pck_cache_key()
+    return _get_common_localization_indexes_cached(locale, pck_cache_key)
+
+
+def clear_localization_runtime_cache() -> None:
+    """
+    清除本地化运行时缓存。
+    
+    供 GUI 在切换 PCK 后调用，确保本地化索引重新加载。
+    """
+    _get_common_localization_indexes_cached.cache_clear()
 
 
 def _lookup_localized_name(item_id: str | None, *, category: str, locale: str = "zhs") -> str | None:

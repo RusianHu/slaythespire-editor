@@ -8,8 +8,16 @@ from typing import Any, Iterable
 
 from .pck_extract import GodotPckEntry, GodotPckReader
 from .save_io import DEFAULT_STS2_INSTALL_DIR
+from .path_manager import (
+    build_missing_pck_help_text,
+    resolve_sts2_pck_path,
+    validate_sts2_pck_path,
+)
 
 DEFAULT_STS2_PCK_PATH = DEFAULT_STS2_INSTALL_DIR / "SlayTheSpire2.pck"
+
+# Runtime PCK path override for GUI
+_RUNTIME_PCK_PATH_OVERRIDE: Path | None = None
 
 _ASCII_STRING_RE = re.compile(rb"[ -~]{8,}")
 _LOCALIZATION_PATH_RE = re.compile(
@@ -37,6 +45,69 @@ KNOWN_DICTIONARY_FILES = (
     "map.json",
     "run_history.json",
 )
+
+
+def set_runtime_pck_path_override(pck_path: str | Path | None) -> Path | None:
+    """设置运行期 PCK 路径覆盖。若传入为空，则清空覆盖。"""
+    global _RUNTIME_PCK_PATH_OVERRIDE
+    if pck_path is None:
+        _RUNTIME_PCK_PATH_OVERRIDE = None
+        return None
+    _RUNTIME_PCK_PATH_OVERRIDE = Path(pck_path).expanduser().resolve()
+    return _RUNTIME_PCK_PATH_OVERRIDE
+
+
+def get_runtime_pck_path_override() -> Path | None:
+    """获取当前运行期 PCK 路径覆盖。"""
+    return _RUNTIME_PCK_PATH_OVERRIDE
+
+
+def get_effective_pck_cache_key() -> str:
+    """返回当前有效 PCK 路径的字符串；若未找到则返回空字符串。"""
+    try:
+        path = _resolve_effective_pck_path()
+        return str(path)
+    except (FileNotFoundError, ValueError):
+        return ""
+
+
+def _resolve_effective_pck_path(pck_path: str | Path | None = None) -> Path:
+    """
+    解析有效的 PCK 路径，优先级：
+    1) 显式传入的 pck_path
+    2) _RUNTIME_PCK_PATH_OVERRIDE
+    3) resolve_sts2_pck_path(None) 的结果
+    
+    若最终没有路径，抛出 FileNotFoundError。
+    对解析到的路径调用 validate_sts2_pck_path 进行校验。
+    """
+    resolved_path: Path | None = None
+    
+    if pck_path is not None:
+        resolved_path = Path(pck_path).expanduser().resolve()
+    elif _RUNTIME_PCK_PATH_OVERRIDE is not None:
+        resolved_path = _RUNTIME_PCK_PATH_OVERRIDE
+    else:
+        result = resolve_sts2_pck_path(None)
+        resolved_path = result.path
+    
+    if resolved_path is None:
+        help_text = build_missing_pck_help_text()
+        raise FileNotFoundError(f"无法找到 PCK 文件。\n{help_text}")
+    
+    validation = validate_sts2_pck_path(resolved_path)
+    if not validation.ok:
+        error_parts = [validation.message]
+        if validation.details:
+            error_parts.append("\n".join(validation.details))
+        else:
+            error_parts.append(build_missing_pck_help_text())
+        raise FileNotFoundError("\n".join(error_parts))
+    
+    if validation.normalized_path is None:
+        raise FileNotFoundError("PCK 路径校验通过但未返回规范化路径")
+    
+    return validation.normalized_path
 
 
 @dataclass(slots=True)
@@ -131,15 +202,7 @@ def _collect_localization_paths_from_entries(
 
 
 def probe_localization_from_pck(pck_path: str | Path | None = None) -> LocalizationProbeResult:
-    target_path = (
-        Path(pck_path).expanduser().resolve()
-        if pck_path is not None
-        else DEFAULT_STS2_PCK_PATH.resolve()
-    )
-    if not target_path.exists():
-        raise FileNotFoundError(f"PCK 文件不存在：{target_path}")
-    if not target_path.is_file():
-        raise ValueError(f"PCK 路径不是文件：{target_path}")
+    target_path = _resolve_effective_pck_path(pck_path)
 
     localization_paths: set[str] = set()
     resource_path_samples: set[str] = set()
@@ -195,11 +258,7 @@ def extract_localization_json_from_pck(
     resource_path: str,
     pck_path: str | Path | None = None,
 ) -> Any:
-    target_path = (
-        Path(pck_path).expanduser().resolve()
-        if pck_path is not None
-        else DEFAULT_STS2_PCK_PATH.resolve()
-    )
+    target_path = _resolve_effective_pck_path(pck_path)
     reader = GodotPckReader(target_path)
     raw = reader.read_entry_bytes(resource_path)
     text = raw.decode("utf-8-sig")
