@@ -4,7 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
-from sts2 import StS2SaveIO
+from sts2.save_io import StS2SaveIO
 from sts2.localization import (
     build_localization_probe_text,
     probe_localization_from_pck,

@@ -4,3 +4,7 @@
 /sts2/__pycache__
 /.augment
 AGENTS.md
+
+/build
+/dist
+/dist_installer
