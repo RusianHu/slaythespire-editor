@@ -1287,6 +1287,39 @@ class StS2MainFrame(wx.Frame):
         return mapping.get(item_kind, item_kind)
 
     @staticmethod
+    def _read_spin_ctrl_int(ctrl: Any, default: int = 0) -> int:
+        """Read the current integer value from a SpinCtrl, including uncommitted text."""
+        if ctrl is None:
+            return default
+
+        get_text_value = getattr(ctrl, "GetTextValue", None)
+        if callable(get_text_value):
+            try:
+                text_value = str(get_text_value()).strip()
+            except Exception:
+                text_value = ""
+            if text_value:
+                try:
+                    return int(text_value)
+                except ValueError:
+                    pass
+
+        get_value = getattr(ctrl, "GetValue", None)
+        if callable(get_value):
+            try:
+                value = get_value()
+            except Exception:
+                value = default
+            if isinstance(value, int):
+                return value
+            try:
+                return int(str(value).strip())
+            except (TypeError, ValueError):
+                pass
+
+        return default
+
+    @staticmethod
     def _structured_item_kind(item_kind: str) -> str:
         mapping = {
             "deck": "deck",
@@ -1943,7 +1976,7 @@ class StS2MainFrame(wx.Frame):
 
         try:
             if self.current_info.kind in (SaveFileKind.RUN_HISTORY, SaveFileKind.CURRENT_RUN):
-                ascension = self.run_ascension_ctrl.GetValue()
+                ascension = self._read_spin_ctrl_int(self.run_ascension_ctrl, 0)
                 seed = self.run_seed_ctrl.GetValue()
                 game_mode = self.run_game_mode_ctrl.GetValue()
 
@@ -1967,7 +2000,7 @@ class StS2MainFrame(wx.Frame):
                 if selected_player != wx.NOT_FOUND:
                     self._sync_all_run_items_from_editor_text()
                     character = self.run_character_ctrl.GetValue().strip()
-                    max_potion_slot_count = self.run_max_potion_slots_ctrl.GetValue()
+                    max_potion_slot_count = self._read_spin_ctrl_int(self.run_max_potion_slots_ctrl, 0)
 
                     updated_data = apply_run_player_fields(
                         updated_data,
@@ -1987,10 +2020,10 @@ class StS2MainFrame(wx.Frame):
                         self._load_selected_run_player_fields()
 
             elif self.current_info.kind is SaveFileKind.PROGRESS:
-                current_score = self.progress_current_score_ctrl.GetValue()
-                floors_climbed = self.progress_floors_climbed_ctrl.GetValue()
-                total_playtime = self.progress_total_playtime_ctrl.GetValue()
-                total_unlocks = self.progress_total_unlocks_ctrl.GetValue()
+                current_score = self._read_spin_ctrl_int(self.progress_current_score_ctrl, 0)
+                floors_climbed = self._read_spin_ctrl_int(self.progress_floors_climbed_ctrl, 0)
+                total_playtime = self._read_spin_ctrl_int(self.progress_total_playtime_ctrl, 0)
+                total_unlocks = self._read_spin_ctrl_int(self.progress_total_unlocks_ctrl, 0)
                 pending_character_unlock = self.progress_pending_character_unlock_ctrl.GetValue().strip()
 
                 updated_data = apply_progress_basic_fields(
@@ -2005,7 +2038,7 @@ class StS2MainFrame(wx.Frame):
 
             else:
                 fast_mode = self.prefs_fast_mode_ctrl.GetValue().strip()
-                screenshake = self.prefs_screenshake_ctrl.GetValue()
+                screenshake = self._read_spin_ctrl_int(self.prefs_screenshake_ctrl, 0)
                 long_press = self.prefs_long_press_ctrl.GetValue()
                 mute_in_background = self.prefs_mute_in_background_ctrl.GetValue()
                 show_card_indices = self.prefs_show_card_indices_ctrl.GetValue()
