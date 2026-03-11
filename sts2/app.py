@@ -191,8 +191,19 @@ class StS2MainFrame(wx.Frame):
         left_panel = wx.BoxSizer(wx.VERTICAL)
         left_panel.Add(wx.StaticText(panel, wx.ID_ANY, "可编辑文件"), 0, wx.BOTTOM, 4)
         self.file_list = wx.ListBox(panel, wx.ID_ANY, style=wx.LB_SINGLE)
+        self.file_list.SetMinSize(wx.Size(260, -1))
         self.file_list.Bind(wx.EVT_LISTBOX, self.on_select_file)
         left_panel.Add(self.file_list, 1, wx.EXPAND)
+        left_panel.Add(
+            wx.StaticText(
+                panel,
+                wx.ID_ANY,
+                "建议：优先选择 current_run.save / history/*.run，\n然后直接使用右侧“结构化编辑”的顶部物品区。",
+            ),
+            0,
+            wx.TOP,
+            8,
+        )
         content.Add(left_panel, 0, wx.EXPAND | wx.ALL, 8)
 
         right_panel = wx.BoxSizer(wx.VERTICAL)
@@ -207,19 +218,11 @@ class StS2MainFrame(wx.Frame):
             wx.FONTWEIGHT_NORMAL,
         )
 
-        # Create notebook with three tabs
         self.notebook = wx.Notebook(panel, wx.ID_ANY)
+        self.structured_edit_tab_index = 0
+        self.structured_view_tab_index = 1
+        self.json_editor_tab_index = 2
 
-        # Tab 1: 结构化视图 (read-only)
-        self.structured_view = wx.TextCtrl(
-            self.notebook,
-            wx.ID_ANY,
-            style=wx.TE_MULTILINE | wx.HSCROLL | wx.TE_RICH2 | wx.TE_READONLY,
-        )
-        self.structured_view.SetFont(mono_font)
-        self.notebook.AddPage(self.structured_view, "结构化视图")
-
-        # Tab 2: 结构化编辑
         self.structured_edit_panel = wx.ScrolledWindow(
             self.notebook,
             wx.ID_ANY,
@@ -228,187 +231,52 @@ class StS2MainFrame(wx.Frame):
         structured_edit_panel = self.structured_edit_panel
         structured_edit_panel.SetScrollRate(10, 10)
         structured_edit_sizer = wx.BoxSizer(wx.VERTICAL)
-        
-        # Description text
-        desc_text = wx.StaticText(
-            structured_edit_panel, 
-            wx.ID_ANY, 
-            "当前支持战局基础字段、档案进度和偏好设置的第一版结构化编辑"
-        )
-        structured_edit_sizer.Add(desc_text, 0, wx.ALL, 10)
-        
-        # Form fields using FlexGridSizer
-        form_sizer = wx.FlexGridSizer(4, 2, 10, 10)
-        form_sizer.AddGrowableCol(1, 1)
-        
-        # Ascension field
-        form_sizer.Add(
-            wx.StaticText(structured_edit_panel, wx.ID_ANY, "飞升等级 (ascension):"),
+
+        intro_box = wx.StaticBoxSizer(wx.VERTICAL, structured_edit_panel, "上手即用")
+        intro_box.Add(
+            wx.StaticText(
+                structured_edit_panel,
+                wx.ID_ANY,
+                "推荐顺序：先在顶部的卡牌 / 遗物 / 药水区直接操作；确认无误后点击底部“同步到 JSON（未保存）”；最后再点击窗口顶部“保存”。",
+            ),
             0,
-            wx.ALIGN_CENTER_VERTICAL
+            wx.ALL,
+            8,
         )
-        self.run_ascension_ctrl = wx.SpinCtrl(
-            structured_edit_panel,
-            wx.ID_ANY,
-            min=0,
-            max=99,
-            initial=0
-        )
-        form_sizer.Add(self.run_ascension_ctrl, 1, wx.EXPAND)
-        
-        # Seed field
-        form_sizer.Add(
-            wx.StaticText(structured_edit_panel, wx.ID_ANY, "种子 (seed):"),
+        intro_box.Add(
+            wx.StaticText(
+                structured_edit_panel,
+                wx.ID_ANY,
+                "候选下拉与中文名预览只用于搜索和显示，真正写回存档的始终是内部 ID。",
+            ),
             0,
-            wx.ALIGN_CENTER_VERTICAL
+            wx.LEFT | wx.RIGHT | wx.BOTTOM,
+            8,
         )
-        self.run_seed_ctrl = wx.TextCtrl(structured_edit_panel, wx.ID_ANY, "")
-        form_sizer.Add(self.run_seed_ctrl, 1, wx.EXPAND)
-        
-        # Game mode field
-        form_sizer.Add(
-            wx.StaticText(structured_edit_panel, wx.ID_ANY, "游戏模式 (game_mode):"),
+        structured_edit_sizer.Add(intro_box, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 10)
+
+        quick_items_box = wx.StaticBoxSizer(wx.VERTICAL, structured_edit_panel, "卡牌 / 遗物 / 药水（推荐优先使用）")
+        quick_items_box.Add(
+            wx.StaticText(
+                structured_edit_panel,
+                wx.ID_ANY,
+                "上方搜索候选，下方查看当前列表。常用操作都放在这里，通常不需要先手动改原始 ID 文本。",
+            ),
             0,
-            wx.ALIGN_CENTER_VERTICAL
+            wx.ALL,
+            8,
         )
-        self.run_game_mode_ctrl = wx.TextCtrl(structured_edit_panel, wx.ID_ANY, "")
-        form_sizer.Add(self.run_game_mode_ctrl, 1, wx.EXPAND)
-        
-        # Win field
-        form_sizer.Add(
-            wx.StaticText(structured_edit_panel, wx.ID_ANY, "胜利 (win):"),
-            0,
-            wx.ALIGN_CENTER_VERTICAL
-        )
-        self.run_win_choice = wx.Choice(
-            structured_edit_panel,
-            wx.ID_ANY,
-            choices=["未设置", "是", "否"]
-        )
-        self.run_win_choice.SetSelection(0)
-        form_sizer.Add(self.run_win_choice, 1, wx.EXPAND)
-        
-        structured_edit_sizer.Add(form_sizer, 0, wx.EXPAND | wx.ALL, 10)
-        
-        # Progress.save editing section
-        progress_box = wx.StaticBoxSizer(wx.VERTICAL, structured_edit_panel, "档案进度编辑")
-        
-        # Description text
-        progress_desc = wx.StaticText(
-            structured_edit_panel,
-            wx.ID_ANY,
-            "当前支持档案进度的第一版结构化编辑。"
-        )
-        progress_box.Add(progress_desc, 0, wx.ALL, 8)
-        
-        # Progress form fields using FlexGridSizer
-        progress_form_sizer = wx.FlexGridSizer(0, 2, 8, 8)
-        progress_form_sizer.AddGrowableCol(1, 1)
-        
-        # Current score field
-        progress_form_sizer.Add(
-            wx.StaticText(structured_edit_panel, wx.ID_ANY, "当前分数："),
-            0,
-            wx.ALIGN_CENTER_VERTICAL
-        )
-        self.progress_current_score_ctrl = wx.SpinCtrl(
-            structured_edit_panel,
-            wx.ID_ANY,
-            min=0,
-            max=999999,
-            initial=0
-        )
-        progress_form_sizer.Add(self.progress_current_score_ctrl, 1, wx.EXPAND)
-        
-        # Floors climbed field
-        progress_form_sizer.Add(
-            wx.StaticText(structured_edit_panel, wx.ID_ANY, "总爬塔层数："),
-            0,
-            wx.ALIGN_CENTER_VERTICAL
-        )
-        self.progress_floors_climbed_ctrl = wx.SpinCtrl(
-            structured_edit_panel,
-            wx.ID_ANY,
-            min=0,
-            max=999999,
-            initial=0
-        )
-        progress_form_sizer.Add(self.progress_floors_climbed_ctrl, 1, wx.EXPAND)
-        
-        # Total playtime field
-        progress_form_sizer.Add(
-            wx.StaticText(structured_edit_panel, wx.ID_ANY, "总游玩时长："),
-            0,
-            wx.ALIGN_CENTER_VERTICAL
-        )
-        self.progress_total_playtime_ctrl = wx.SpinCtrl(
-            structured_edit_panel,
-            wx.ID_ANY,
-            min=0,
-            max=999999999,
-            initial=0
-        )
-        progress_form_sizer.Add(self.progress_total_playtime_ctrl, 1, wx.EXPAND)
-        
-        # Total unlocks field
-        progress_form_sizer.Add(
-            wx.StaticText(structured_edit_panel, wx.ID_ANY, "总解锁数："),
-            0,
-            wx.ALIGN_CENTER_VERTICAL
-        )
-        self.progress_total_unlocks_ctrl = wx.SpinCtrl(
-            structured_edit_panel,
-            wx.ID_ANY,
-            min=0,
-            max=999999,
-            initial=0
-        )
-        progress_form_sizer.Add(self.progress_total_unlocks_ctrl, 1, wx.EXPAND)
-        
-        # Pending character unlock field
-        progress_form_sizer.Add(
-            wx.StaticText(structured_edit_panel, wx.ID_ANY, "待解锁角色："),
-            0,
-            wx.ALIGN_CENTER_VERTICAL
-        )
-        self.progress_pending_character_unlock_ctrl = wx.TextCtrl(
-            structured_edit_panel,
-            wx.ID_ANY,
-            ""
-        )
-        progress_form_sizer.Add(self.progress_pending_character_unlock_ctrl, 1, wx.EXPAND)
-        self.progress_pending_character_unlock_ctrl.Bind(wx.EVT_TEXT, self.on_progress_localized_preview_changed)
-        
-        # Create the preview control for pending character unlock
-        self.progress_pending_character_unlock_preview_ctrl = wx.TextCtrl(
+
+        self.run_player_choice = wx.Choice(structured_edit_panel, wx.ID_ANY)
+        self.run_player_choice.Bind(wx.EVT_CHOICE, self.on_select_run_player)
+        self.run_character_ctrl = wx.TextCtrl(structured_edit_panel, wx.ID_ANY, "")
+        self.run_character_preview_ctrl = wx.TextCtrl(
             structured_edit_panel,
             wx.ID_ANY,
             "",
             style=wx.TE_READONLY,
         )
-        
-        # Pending character unlock Chinese name preview
-        progress_form_sizer.Add(
-            wx.StaticText(structured_edit_panel, wx.ID_ANY, "待解锁角色中文名："),
-            0,
-            wx.ALIGN_CENTER_VERTICAL
-        )
-        progress_form_sizer.Add(self.progress_pending_character_unlock_preview_ctrl, 1, wx.EXPAND)
-        
-        progress_box.Add(progress_form_sizer, 0, wx.EXPAND | wx.ALL, 8)
-        structured_edit_sizer.Add(progress_box, 0, wx.EXPAND | wx.ALL, 10)
-
-        player_box = wx.StaticBoxSizer(wx.VERTICAL, structured_edit_panel, "玩家编辑")
-        player_desc = wx.StaticText(
-            structured_edit_panel,
-            wx.ID_ANY,
-            "当前支持战局基础字段，以及玩家卡组/遗物/药水的结构化编辑。卡组会保留升级、附魔等元数据；多行文本框仍显示内部 ID 投影。"
-        )
-        player_box.Add(player_desc, 0, wx.ALL, 8)
-
-        self.run_player_choice = wx.Choice(structured_edit_panel, wx.ID_ANY)
-        self.run_player_choice.Bind(wx.EVT_CHOICE, self.on_select_run_player)
-        self.run_character_ctrl = wx.TextCtrl(structured_edit_panel, wx.ID_ANY, "")
+        self.run_character_ctrl.Bind(wx.EVT_TEXT, self.on_run_localized_preview_changed)
         self.run_max_potion_slots_ctrl = wx.SpinCtrl(
             structured_edit_panel,
             wx.ID_ANY,
@@ -416,6 +284,338 @@ class StS2MainFrame(wx.Frame):
             max=20,
             initial=0,
         )
+
+        player_header_grid = wx.FlexGridSizer(0, 4, 8, 12)
+        player_header_grid.AddGrowableCol(1, 1)
+        player_header_grid.AddGrowableCol(3, 1)
+        player_header_grid.Add(wx.StaticText(structured_edit_panel, wx.ID_ANY, "当前玩家："), 0, wx.ALIGN_CENTER_VERTICAL)
+        player_header_grid.Add(self.run_player_choice, 1, wx.EXPAND)
+        player_header_grid.Add(wx.StaticText(structured_edit_panel, wx.ID_ANY, "角色 ID："), 0, wx.ALIGN_CENTER_VERTICAL)
+        player_header_grid.Add(self.run_character_ctrl, 1, wx.EXPAND)
+        player_header_grid.Add(wx.StaticText(structured_edit_panel, wx.ID_ANY, "角色中文名："), 0, wx.ALIGN_CENTER_VERTICAL)
+        player_header_grid.Add(self.run_character_preview_ctrl, 1, wx.EXPAND)
+        player_header_grid.Add(wx.StaticText(structured_edit_panel, wx.ID_ANY, "药水槽上限："), 0, wx.ALIGN_CENTER_VERTICAL)
+        player_header_grid.Add(self.run_max_potion_slots_ctrl, 1, wx.EXPAND)
+        quick_items_box.Add(player_header_grid, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
+
+        def _populate_quick_item_editor(parent: wx.Window, root_sizer: wx.BoxSizer, *, item_kind: str) -> None:
+            search_row = wx.BoxSizer(wx.HORIZONTAL)
+            search_row.Add(
+                wx.StaticText(parent, wx.ID_ANY, "搜索："),
+                0,
+                wx.ALIGN_CENTER_VERTICAL | wx.RIGHT,
+                6,
+            )
+            search_ctrl = wx.TextCtrl(parent, wx.ID_ANY, "")
+            search_ctrl.Bind(
+                wx.EVT_TEXT,
+                lambda event, current_kind=item_kind: self.on_run_candidate_search_changed(event, current_kind),
+            )
+            search_row.Add(search_ctrl, 1, wx.RIGHT, 8)
+
+            search_row.Add(
+                wx.StaticText(parent, wx.ID_ANY, "候选："),
+                0,
+                wx.ALIGN_CENTER_VERTICAL | wx.RIGHT,
+                6,
+            )
+            choice_ctrl = wx.Choice(parent, wx.ID_ANY)
+            search_row.Add(choice_ctrl, 1)
+            root_sizer.Add(search_row, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 6)
+
+            primary_actions = wx.BoxSizer(wx.HORIZONTAL)
+            add_button = wx.Button(parent, wx.ID_ANY, "添加到末尾")
+            add_button.Bind(
+                wx.EVT_BUTTON,
+                lambda event, current_kind=item_kind: self.on_add_run_candidate(event, current_kind),
+            )
+            primary_actions.Add(add_button, 0, wx.RIGHT, 6)
+
+            remove_button = wx.Button(parent, wx.ID_ANY, "删除一个同 ID")
+            remove_button.Bind(
+                wx.EVT_BUTTON,
+                lambda event, current_kind=item_kind: self.on_remove_run_candidate(event, current_kind),
+            )
+            primary_actions.Add(remove_button, 0, wx.RIGHT, 6)
+
+            clear_all_button = wx.Button(parent, wx.ID_ANY, "清空列表")
+            clear_all_button.Bind(
+                wx.EVT_BUTTON,
+                lambda event, current_kind=item_kind: self.on_clear_all_run_items(event, current_kind),
+            )
+            primary_actions.Add(clear_all_button, 0)
+            root_sizer.Add(primary_actions, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 6)
+
+            listbox = wx.ListBox(parent, wx.ID_ANY, style=wx.LB_SINGLE)
+            listbox.SetMinSize(wx.Size(-1, 260 if item_kind == "deck" else 240))
+            listbox.Bind(
+                wx.EVT_LISTBOX,
+                lambda event, current_kind=item_kind: self.on_select_run_item(event, current_kind),
+            )
+            root_sizer.Add(listbox, 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 6)
+
+            secondary_actions = wx.BoxSizer(wx.HORIZONTAL)
+            remove_selected_button = wx.Button(parent, wx.ID_ANY, "删除选中")
+            remove_selected_button.Bind(
+                wx.EVT_BUTTON,
+                lambda event, current_kind=item_kind: self.on_remove_selected_run_item(event, current_kind),
+            )
+            secondary_actions.Add(remove_selected_button, 0, wx.RIGHT, 6)
+
+            move_up_button = wx.Button(parent, wx.ID_ANY, "上移")
+            move_up_button.Bind(
+                wx.EVT_BUTTON,
+                lambda event, current_kind=item_kind: self.on_move_run_item_up(event, current_kind),
+            )
+            secondary_actions.Add(move_up_button, 0, wx.RIGHT, 6)
+
+            move_down_button = wx.Button(parent, wx.ID_ANY, "下移")
+            move_down_button.Bind(
+                wx.EVT_BUTTON,
+                lambda event, current_kind=item_kind: self.on_move_run_item_down(event, current_kind),
+            )
+            secondary_actions.Add(move_down_button, 0, wx.RIGHT, 6)
+
+            replace_button = wx.Button(parent, wx.ID_ANY, "替换为候选")
+            replace_button.Bind(
+                wx.EVT_BUTTON,
+                lambda event, current_kind=item_kind: self.on_replace_selected_run_item(event, current_kind),
+            )
+            secondary_actions.Add(replace_button, 0)
+            root_sizer.Add(secondary_actions, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 6)
+
+            setattr(self, f"run_{item_kind}_candidate_search_ctrl", search_ctrl)
+            setattr(self, f"run_{item_kind}_candidate_choice", choice_ctrl)
+            setattr(self, f"run_{item_kind}_candidate_add_button", add_button)
+            setattr(self, f"run_{item_kind}_candidate_remove_button", remove_button)
+            setattr(self, f"run_{item_kind}_candidate_ids", [])
+            setattr(self, f"run_{item_kind}_items_listbox", listbox)
+            setattr(self, f"run_{item_kind}_remove_selected_button", remove_selected_button)
+            setattr(self, f"run_{item_kind}_move_up_button", move_up_button)
+            setattr(self, f"run_{item_kind}_move_down_button", move_down_button)
+            setattr(self, f"run_{item_kind}_replace_button", replace_button)
+            setattr(self, f"run_{item_kind}_clear_all_button", clear_all_button)
+
+        def _build_quick_item_page(title_text: str, item_kind: str) -> wx.Panel:
+            page = wx.Panel(self.run_items_notebook, wx.ID_ANY)
+            page_sizer = wx.BoxSizer(wx.VERTICAL)
+
+            page_sizer.Add(
+                wx.StaticText(page, wx.ID_ANY, f"{title_text}操作区：先搜候选，再对当前列表执行添加、替换、排序或清空。"),
+                0,
+                wx.ALL,
+                6,
+            )
+
+            if item_kind == "deck":
+                self.run_deck_editor_notebook = wx.Notebook(page, wx.ID_ANY)
+                self.run_deck_editor_notebook.SetMinSize(wx.Size(-1, 420))
+                self.run_deck_editor_notebook.Bind(wx.EVT_NOTEBOOK_PAGE_CHANGED, self.on_notebook_page_changed)
+
+                deck_list_page = wx.Panel(self.run_deck_editor_notebook, wx.ID_ANY)
+                deck_list_sizer = wx.BoxSizer(wx.VERTICAL)
+                deck_list_sizer.Add(
+                    wx.StaticText(deck_list_page, wx.ID_ANY, "这里专门管理当前卡组内容、顺序与替换。"),
+                    0,
+                    wx.LEFT | wx.RIGHT | wx.BOTTOM,
+                    6,
+                )
+                _populate_quick_item_editor(deck_list_page, deck_list_sizer, item_kind="deck")
+                deck_list_page.SetSizer(deck_list_sizer)
+                self.run_deck_editor_notebook.AddPage(deck_list_page, "当前卡组")
+
+                deck_meta_page = wx.Panel(self.run_deck_editor_notebook, wx.ID_ANY)
+                deck_meta_sizer = wx.BoxSizer(wx.VERTICAL)
+                deck_meta_box = wx.StaticBoxSizer(wx.VERTICAL, deck_meta_page, "选中卡牌附加属性")
+                deck_meta_box.Add(
+                    wx.StaticText(
+                        deck_meta_page,
+                        wx.ID_ANY,
+                        "选中“当前卡组”中的某张卡后，可在这里直接修改升级等级与附魔。更换卡牌 ID 时会自动清理不再适用的卡牌专属元数据。",
+                    ),
+                    0,
+                    wx.LEFT | wx.RIGHT | wx.TOP | wx.BOTTOM,
+                    6,
+                )
+
+                deck_meta_grid = wx.FlexGridSizer(0, 4, 8, 8)
+                deck_meta_grid.AddGrowableCol(1, 1)
+                deck_meta_grid.AddGrowableCol(3, 1)
+
+                deck_meta_grid.Add(wx.StaticText(deck_meta_page, wx.ID_ANY, "升级等级："), 0, wx.ALIGN_CENTER_VERTICAL)
+                self.run_deck_upgrade_level_ctrl = wx.SpinCtrl(
+                    deck_meta_page,
+                    wx.ID_ANY,
+                    min=0,
+                    max=99,
+                    initial=0,
+                )
+                deck_meta_grid.Add(self.run_deck_upgrade_level_ctrl, 0, wx.EXPAND)
+
+                deck_meta_grid.Add(wx.StaticText(deck_meta_page, wx.ID_ANY, "附魔搜索："), 0, wx.ALIGN_CENTER_VERTICAL)
+                self.run_deck_enchantment_search_ctrl = wx.TextCtrl(deck_meta_page, wx.ID_ANY, "")
+                deck_meta_grid.Add(self.run_deck_enchantment_search_ctrl, 1, wx.EXPAND)
+
+                deck_meta_grid.Add(wx.StaticText(deck_meta_page, wx.ID_ANY, "附魔候选："), 0, wx.ALIGN_CENTER_VERTICAL)
+                self.run_deck_enchantment_choice = wx.Choice(deck_meta_page, wx.ID_ANY)
+                deck_meta_grid.Add(self.run_deck_enchantment_choice, 1, wx.EXPAND)
+
+                deck_meta_grid.Add(wx.StaticText(deck_meta_page, wx.ID_ANY, "附魔层数："), 0, wx.ALIGN_CENTER_VERTICAL)
+                self.run_deck_enchantment_amount_ctrl = wx.SpinCtrl(
+                    deck_meta_page,
+                    wx.ID_ANY,
+                    min=1,
+                    max=99,
+                    initial=1,
+                )
+                deck_meta_grid.Add(self.run_deck_enchantment_amount_ctrl, 0, wx.EXPAND)
+                deck_meta_box.Add(deck_meta_grid, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 6)
+
+                deck_meta_actions = wx.BoxSizer(wx.HORIZONTAL)
+                self.run_deck_apply_upgrade_button = wx.Button(deck_meta_page, wx.ID_ANY, "应用升级")
+                self.run_deck_clear_upgrade_button = wx.Button(deck_meta_page, wx.ID_ANY, "清除升级")
+                self.run_deck_apply_enchantment_button = wx.Button(deck_meta_page, wx.ID_ANY, "应用附魔")
+                self.run_deck_clear_enchantment_button = wx.Button(deck_meta_page, wx.ID_ANY, "清除附魔")
+                deck_meta_actions.Add(self.run_deck_apply_upgrade_button, 0, wx.RIGHT, 8)
+                deck_meta_actions.Add(self.run_deck_clear_upgrade_button, 0, wx.RIGHT, 8)
+                deck_meta_actions.Add(self.run_deck_apply_enchantment_button, 0, wx.RIGHT, 8)
+                deck_meta_actions.Add(self.run_deck_clear_enchantment_button, 0)
+                deck_meta_box.Add(deck_meta_actions, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 6)
+
+                self.run_deck_selected_meta_preview_ctrl = wx.TextCtrl(
+                    deck_meta_page,
+                    wx.ID_ANY,
+                    "",
+                    style=wx.TE_MULTILINE | wx.TE_READONLY | wx.HSCROLL | wx.TE_RICH2,
+                )
+                self.run_deck_selected_meta_preview_ctrl.SetFont(mono_font)
+                self.run_deck_selected_meta_preview_ctrl.SetMinSize(wx.Size(-1, 120))
+                deck_meta_box.Add(self.run_deck_selected_meta_preview_ctrl, 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 6)
+
+                deck_meta_sizer.Add(deck_meta_box, 1, wx.EXPAND | wx.ALL, 6)
+                deck_meta_page.SetSizer(deck_meta_sizer)
+                self.run_deck_editor_notebook.AddPage(deck_meta_page, "升级 / 附魔")
+
+                page_sizer.Add(self.run_deck_editor_notebook, 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 6)
+            else:
+                _populate_quick_item_editor(page, page_sizer, item_kind=item_kind)
+
+            page.SetSizer(page_sizer)
+            return page
+
+        self.run_items_notebook = wx.Notebook(structured_edit_panel, wx.ID_ANY)
+        self.run_items_notebook.SetMinSize(wx.Size(-1, 500))
+        self.run_items_notebook.Bind(wx.EVT_NOTEBOOK_PAGE_CHANGED, self.on_notebook_page_changed)
+        self.run_items_notebook.AddPage(_build_quick_item_page("卡组", "deck"), "卡组(0)")
+        self.run_items_notebook.AddPage(_build_quick_item_page("遗物", "relic"), "遗物(0)")
+        self.run_items_notebook.AddPage(_build_quick_item_page("药水", "potion"), "药水(0)")
+        quick_items_box.Add(self.run_items_notebook, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
+
+        localized_preview_box = wx.StaticBoxSizer(wx.VERTICAL, structured_edit_panel, "中文名总览（仅展示）")
+        localized_preview_box.Add(
+            wx.StaticText(
+                structured_edit_panel,
+                wx.ID_ANY,
+                "用于快速确认当前卡组、遗物、药水是否正确；不会写回存档。",
+            ),
+            0,
+            wx.LEFT | wx.RIGHT | wx.TOP | wx.BOTTOM,
+            6,
+        )
+
+        preview_filter_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        preview_filter_sizer.Add(
+            wx.StaticText(structured_edit_panel, wx.ID_ANY, "搜索："),
+            0,
+            wx.ALIGN_CENTER_VERTICAL | wx.RIGHT,
+            6,
+        )
+        self.run_localized_search_ctrl = wx.TextCtrl(structured_edit_panel, wx.ID_ANY, "")
+        self.run_localized_search_ctrl.Bind(wx.EVT_TEXT, self.on_run_localized_filter_changed)
+        preview_filter_sizer.Add(self.run_localized_search_ctrl, 1, wx.RIGHT, 12)
+        preview_filter_sizer.Add(
+            wx.StaticText(structured_edit_panel, wx.ID_ANY, "筛选："),
+            0,
+            wx.ALIGN_CENTER_VERTICAL | wx.RIGHT,
+            6,
+        )
+        self.run_localized_filter_choice = wx.Choice(
+            structured_edit_panel,
+            wx.ID_ANY,
+            choices=["全部", "卡组", "遗物", "药水"],
+        )
+        self.run_localized_filter_choice.SetSelection(0)
+        self.run_localized_filter_choice.Bind(wx.EVT_CHOICE, self.on_run_localized_filter_changed)
+        preview_filter_sizer.Add(self.run_localized_filter_choice, 0)
+        localized_preview_box.Add(preview_filter_sizer, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 6)
+
+        self.run_localized_preview_ctrl = wx.TextCtrl(
+            structured_edit_panel,
+            wx.ID_ANY,
+            "",
+            style=wx.TE_MULTILINE | wx.HSCROLL | wx.TE_RICH2 | wx.TE_READONLY,
+        )
+        self.run_localized_preview_ctrl.SetFont(mono_font)
+        self.run_localized_preview_ctrl.SetMinSize(wx.Size(-1, 180))
+        localized_preview_box.Add(self.run_localized_preview_ctrl, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 6)
+        quick_items_box.Add(localized_preview_box, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
+
+        structured_edit_sizer.Add(quick_items_box, 0, wx.EXPAND | wx.ALL, 10)
+
+        run_basics_box = wx.StaticBoxSizer(wx.VERTICAL, structured_edit_panel, "战局基础字段")
+        run_basics_box.Add(
+            wx.StaticText(
+                structured_edit_panel,
+                wx.ID_ANY,
+                "这些字段也会参与结构化同步，但一般没有顶部物品区那么高频。",
+            ),
+            0,
+            wx.ALL,
+            8,
+        )
+
+        self.run_ascension_ctrl = wx.SpinCtrl(
+            structured_edit_panel,
+            wx.ID_ANY,
+            min=0,
+            max=99,
+            initial=0,
+        )
+        self.run_seed_ctrl = wx.TextCtrl(structured_edit_panel, wx.ID_ANY, "")
+        self.run_game_mode_ctrl = wx.TextCtrl(structured_edit_panel, wx.ID_ANY, "")
+        self.run_win_choice = wx.Choice(
+            structured_edit_panel,
+            wx.ID_ANY,
+            choices=["未设置", "是", "否"],
+        )
+        self.run_win_choice.SetSelection(0)
+
+        run_basics_grid = wx.FlexGridSizer(0, 4, 8, 12)
+        run_basics_grid.AddGrowableCol(1, 1)
+        run_basics_grid.AddGrowableCol(3, 1)
+        run_basics_grid.Add(wx.StaticText(structured_edit_panel, wx.ID_ANY, "飞升等级："), 0, wx.ALIGN_CENTER_VERTICAL)
+        run_basics_grid.Add(self.run_ascension_ctrl, 1, wx.EXPAND)
+        run_basics_grid.Add(wx.StaticText(structured_edit_panel, wx.ID_ANY, "胜利："), 0, wx.ALIGN_CENTER_VERTICAL)
+        run_basics_grid.Add(self.run_win_choice, 1, wx.EXPAND)
+        run_basics_grid.Add(wx.StaticText(structured_edit_panel, wx.ID_ANY, "种子："), 0, wx.ALIGN_CENTER_VERTICAL)
+        run_basics_grid.Add(self.run_seed_ctrl, 1, wx.EXPAND)
+        run_basics_grid.Add(wx.StaticText(structured_edit_panel, wx.ID_ANY, "游戏模式："), 0, wx.ALIGN_CENTER_VERTICAL)
+        run_basics_grid.Add(self.run_game_mode_ctrl, 1, wx.EXPAND)
+        run_basics_box.Add(run_basics_grid, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
+        structured_edit_sizer.Add(run_basics_box, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+
+        advanced_ids_box = wx.StaticBoxSizer(wx.VERTICAL, structured_edit_panel, "高级：原始 ID 文本投影")
+        advanced_ids_box.Add(
+            wx.StaticText(
+                structured_edit_panel,
+                wx.ID_ANY,
+                "这里保留给高级用户做批量文本粘贴或精细调整。上面的可视化列表操作会自动同步到这里。",
+            ),
+            0,
+            wx.ALL,
+            8,
+        )
+
         self.run_deck_ids_ctrl = wx.TextCtrl(
             structured_edit_panel,
             wx.ID_ANY,
@@ -434,296 +634,110 @@ class StS2MainFrame(wx.Frame):
         self.run_deck_ids_ctrl.SetFont(mono_font)
         self.run_relic_ids_ctrl.SetFont(mono_font)
         self.run_potion_ids_ctrl.SetFont(mono_font)
-        self.run_deck_ids_ctrl.SetMinSize(wx.Size(-1, 72))
-        self.run_relic_ids_ctrl.SetMinSize(wx.Size(-1, 72))
-        self.run_potion_ids_ctrl.SetMinSize(wx.Size(-1, 72))
+        self.run_deck_ids_ctrl.SetMinSize(wx.Size(-1, 96))
+        self.run_relic_ids_ctrl.SetMinSize(wx.Size(-1, 96))
+        self.run_potion_ids_ctrl.SetMinSize(wx.Size(-1, 96))
+        self.run_deck_ids_ctrl.Bind(wx.EVT_TEXT, self.on_run_localized_preview_changed)
+        self.run_relic_ids_ctrl.Bind(wx.EVT_TEXT, self.on_run_localized_preview_changed)
+        self.run_potion_ids_ctrl.Bind(wx.EVT_TEXT, self.on_run_localized_preview_changed)
 
-        player_form_sizer = wx.FlexGridSizer(0, 2, 8, 8)
-        player_form_sizer.AddGrowableCol(1, 1)
+        raw_id_columns = wx.BoxSizer(wx.HORIZONTAL)
+        for idx, (label_text, ctrl) in enumerate((
+            ("卡组 ID（每行一个）", self.run_deck_ids_ctrl),
+            ("遗物 ID（每行一个）", self.run_relic_ids_ctrl),
+            ("药水 ID（每行一个）", self.run_potion_ids_ctrl),
+        )):
+            column = wx.BoxSizer(wx.VERTICAL)
+            column.Add(wx.StaticText(structured_edit_panel, wx.ID_ANY, label_text), 0, wx.BOTTOM, 4)
+            column.Add(ctrl, 1, wx.EXPAND)
+            flags = wx.EXPAND
+            border = 0
+            if idx < 2:
+                flags |= wx.RIGHT
+                border = 8
+            raw_id_columns.Add(column, 1, flags, border)
+        advanced_ids_box.Add(raw_id_columns, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
+        structured_edit_sizer.Add(advanced_ids_box, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
 
-        player_form_sizer.Add(wx.StaticText(structured_edit_panel, wx.ID_ANY, "当前玩家："), 0, wx.ALIGN_CENTER_VERTICAL)
-        player_form_sizer.Add(self.run_player_choice, 1, wx.EXPAND)
+        progress_box = wx.StaticBoxSizer(wx.VERTICAL, structured_edit_panel, "档案进度编辑")
+        progress_box.Add(
+            wx.StaticText(
+                structured_edit_panel,
+                wx.ID_ANY,
+                "用于编辑 progress.save；未加载该类型文件时会自动禁用。",
+            ),
+            0,
+            wx.ALL,
+            8,
+        )
 
-        player_form_sizer.Add(wx.StaticText(structured_edit_panel, wx.ID_ANY, "角色 ID："), 0, wx.ALIGN_CENTER_VERTICAL)
-        player_form_sizer.Add(self.run_character_ctrl, 1, wx.EXPAND)
-        
-        self.run_character_preview_ctrl = wx.TextCtrl(
+        progress_form_sizer = wx.FlexGridSizer(0, 4, 8, 12)
+        progress_form_sizer.AddGrowableCol(1, 1)
+        progress_form_sizer.AddGrowableCol(3, 1)
+
+        self.progress_current_score_ctrl = wx.SpinCtrl(
+            structured_edit_panel,
+            wx.ID_ANY,
+            min=0,
+            max=999999,
+            initial=0,
+        )
+        self.progress_floors_climbed_ctrl = wx.SpinCtrl(
+            structured_edit_panel,
+            wx.ID_ANY,
+            min=0,
+            max=999999,
+            initial=0,
+        )
+        self.progress_total_playtime_ctrl = wx.SpinCtrl(
+            structured_edit_panel,
+            wx.ID_ANY,
+            min=0,
+            max=999999999,
+            initial=0,
+        )
+        self.progress_total_unlocks_ctrl = wx.SpinCtrl(
+            structured_edit_panel,
+            wx.ID_ANY,
+            min=0,
+            max=999999,
+            initial=0,
+        )
+        self.progress_pending_character_unlock_ctrl = wx.TextCtrl(structured_edit_panel, wx.ID_ANY, "")
+        self.progress_pending_character_unlock_ctrl.Bind(wx.EVT_TEXT, self.on_progress_localized_preview_changed)
+        self.progress_pending_character_unlock_preview_ctrl = wx.TextCtrl(
             structured_edit_panel,
             wx.ID_ANY,
             "",
             style=wx.TE_READONLY,
         )
-        self.run_character_ctrl.Bind(wx.EVT_TEXT, self.on_run_localized_preview_changed)
-        
-        # Character Chinese name preview
-        player_form_sizer.Add(wx.StaticText(structured_edit_panel, wx.ID_ANY, "角色中文名："), 0, wx.ALIGN_CENTER_VERTICAL)
-        player_form_sizer.Add(self.run_character_preview_ctrl, 1, wx.EXPAND)
 
-        player_form_sizer.Add(wx.StaticText(structured_edit_panel, wx.ID_ANY, "药水槽上限："), 0, wx.ALIGN_CENTER_VERTICAL)
-        player_form_sizer.Add(self.run_max_potion_slots_ctrl, 1, wx.EXPAND)
-
-        player_form_sizer.Add(wx.StaticText(structured_edit_panel, wx.ID_ANY, "卡组 ID（每行一个）："), 0, wx.ALIGN_TOP)
-        player_form_sizer.Add(self.run_deck_ids_ctrl, 1, wx.EXPAND)
-
-        player_form_sizer.Add(wx.StaticText(structured_edit_panel, wx.ID_ANY, "遗物 ID（每行一个）："), 0, wx.ALIGN_TOP)
-        player_form_sizer.Add(self.run_relic_ids_ctrl, 1, wx.EXPAND)
-
-        player_form_sizer.Add(wx.StaticText(structured_edit_panel, wx.ID_ANY, "药水 ID（每行一个）："), 0, wx.ALIGN_TOP)
-        player_form_sizer.Add(self.run_potion_ids_ctrl, 1, wx.EXPAND)
-        
-        self.run_deck_ids_ctrl.Bind(wx.EVT_TEXT, self.on_run_localized_preview_changed)
-        self.run_relic_ids_ctrl.Bind(wx.EVT_TEXT, self.on_run_localized_preview_changed)
-        self.run_potion_ids_ctrl.Bind(wx.EVT_TEXT, self.on_run_localized_preview_changed)
-
-        player_box.Add(player_form_sizer, 0, wx.EXPAND | wx.ALL, 8)
-        
-        # Quick candidate editing section
-        candidate_desc = wx.StaticText(
-            structured_edit_panel,
-            wx.ID_ANY,
-            "快捷编辑（候选搜索 / 下拉选择 / 按钮添加删除；仍然只写内部 ID）"
-        )
-        player_box.Add(candidate_desc, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
-        
-        def _build_candidate_row(label_text: str, item_kind: str) -> wx.BoxSizer:
-            """Build a candidate editing row with search, choice, add and remove buttons."""
-            row = wx.BoxSizer(wx.HORIZONTAL)
-            
-            # Label
-            label = wx.StaticText(structured_edit_panel, wx.ID_ANY, label_text)
-            row.Add(label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
-            
-            # Search box
-            search_ctrl = wx.TextCtrl(structured_edit_panel, wx.ID_ANY, "")
-            search_ctrl.Bind(
-                wx.EVT_TEXT,
-                lambda event, current_kind=item_kind: self.on_run_candidate_search_changed(event, current_kind)
-            )
-            row.Add(search_ctrl, 1, wx.RIGHT, 8)
-            
-            # Choice dropdown
-            choice_ctrl = wx.Choice(structured_edit_panel, wx.ID_ANY)
-            row.Add(choice_ctrl, 1, wx.RIGHT, 8)
-            
-            # Add button
-            add_button = wx.Button(structured_edit_panel, wx.ID_ANY, "添加")
-            add_button.Bind(
-                wx.EVT_BUTTON,
-                lambda event, current_kind=item_kind: self.on_add_run_candidate(event, current_kind)
-            )
-            row.Add(add_button, 0, wx.RIGHT, 8)
-            
-            # Remove button
-            remove_button = wx.Button(structured_edit_panel, wx.ID_ANY, "删除一个")
-            remove_button.Bind(
-                wx.EVT_BUTTON,
-                lambda event, current_kind=item_kind: self.on_remove_run_candidate(event, current_kind)
-            )
-            row.Add(remove_button, 0)
-            
-            # Store controls as instance attributes
-            setattr(self, f"run_{item_kind}_candidate_search_ctrl", search_ctrl)
-            setattr(self, f"run_{item_kind}_candidate_choice", choice_ctrl)
-            setattr(self, f"run_{item_kind}_candidate_add_button", add_button)
-            setattr(self, f"run_{item_kind}_candidate_remove_button", remove_button)
-            setattr(self, f"run_{item_kind}_candidate_ids", [])
-            
-            return row
-        
-        player_box.Add(_build_candidate_row("卡组候选：", "deck"), 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
-        player_box.Add(_build_candidate_row("遗物候选：", "relic"), 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
-        player_box.Add(_build_candidate_row("药水候选：", "potion"), 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
-
-        deck_meta_box = wx.StaticBoxSizer(wx.VERTICAL, structured_edit_panel, "卡组附加属性编辑")
-
-        deck_meta_desc = wx.StaticText(
-            structured_edit_panel,
-            wx.ID_ANY,
-            "选中卡组当前列表中的某张卡后，可直接调整升级等级与附魔；这些信息会随卡牌一起移动和保存。"
-        )
-        deck_meta_box.Add(deck_meta_desc, 0, wx.LEFT | wx.RIGHT | wx.TOP | wx.BOTTOM, 6)
-
-        deck_meta_grid = wx.FlexGridSizer(0, 2, 8, 8)
-        deck_meta_grid.AddGrowableCol(1, 1)
-
-        deck_meta_grid.Add(wx.StaticText(structured_edit_panel, wx.ID_ANY, "升级等级："), 0, wx.ALIGN_CENTER_VERTICAL)
-        self.run_deck_upgrade_level_ctrl = wx.SpinCtrl(
-            structured_edit_panel,
-            wx.ID_ANY,
-            min=0,
-            max=99,
-            initial=0,
-        )
-        deck_meta_grid.Add(self.run_deck_upgrade_level_ctrl, 0, wx.EXPAND)
-
-        deck_meta_grid.Add(wx.StaticText(structured_edit_panel, wx.ID_ANY, "附魔搜索："), 0, wx.ALIGN_CENTER_VERTICAL)
-        self.run_deck_enchantment_search_ctrl = wx.TextCtrl(structured_edit_panel, wx.ID_ANY, "")
-        deck_meta_grid.Add(self.run_deck_enchantment_search_ctrl, 1, wx.EXPAND)
-
-        deck_meta_grid.Add(wx.StaticText(structured_edit_panel, wx.ID_ANY, "附魔候选："), 0, wx.ALIGN_CENTER_VERTICAL)
-        self.run_deck_enchantment_choice = wx.Choice(structured_edit_panel, wx.ID_ANY)
-        deck_meta_grid.Add(self.run_deck_enchantment_choice, 1, wx.EXPAND)
-
-        deck_meta_grid.Add(wx.StaticText(structured_edit_panel, wx.ID_ANY, "附魔层数："), 0, wx.ALIGN_CENTER_VERTICAL)
-        self.run_deck_enchantment_amount_ctrl = wx.SpinCtrl(
-            structured_edit_panel,
-            wx.ID_ANY,
-            min=1,
-            max=99,
-            initial=1,
-        )
-        deck_meta_grid.Add(self.run_deck_enchantment_amount_ctrl, 0, wx.EXPAND)
-
-        deck_meta_box.Add(deck_meta_grid, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 6)
-
-        deck_meta_actions = wx.BoxSizer(wx.HORIZONTAL)
-        self.run_deck_apply_upgrade_button = wx.Button(structured_edit_panel, wx.ID_ANY, "应用升级")
-        self.run_deck_clear_upgrade_button = wx.Button(structured_edit_panel, wx.ID_ANY, "清除升级")
-        self.run_deck_apply_enchantment_button = wx.Button(structured_edit_panel, wx.ID_ANY, "应用附魔")
-        self.run_deck_clear_enchantment_button = wx.Button(structured_edit_panel, wx.ID_ANY, "清除附魔")
-
-        deck_meta_actions.Add(self.run_deck_apply_upgrade_button, 0, wx.RIGHT, 8)
-        deck_meta_actions.Add(self.run_deck_clear_upgrade_button, 0, wx.RIGHT, 8)
-        deck_meta_actions.Add(self.run_deck_apply_enchantment_button, 0, wx.RIGHT, 8)
-        deck_meta_actions.Add(self.run_deck_clear_enchantment_button, 0)
-        deck_meta_box.Add(deck_meta_actions, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 6)
-
-        self.run_deck_selected_meta_preview_ctrl = wx.TextCtrl(
-            structured_edit_panel,
-            wx.ID_ANY,
-            "",
-            style=wx.TE_MULTILINE | wx.TE_READONLY | wx.HSCROLL | wx.TE_RICH2,
-        )
-        self.run_deck_selected_meta_preview_ctrl.SetFont(mono_font)
-        self.run_deck_selected_meta_preview_ctrl.SetMinSize(wx.Size(-1, 72))
-        deck_meta_box.Add(self.run_deck_selected_meta_preview_ctrl, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 6)
-
-        player_box.Add(deck_meta_box, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
-
-        current_items_desc = wx.StaticText(
-            structured_edit_panel,
-            wx.ID_ANY,
-            "当前列表操作（推荐）：支持选中删除、上移下移、用候选替换；原始多行 ID 仍保留供高级手工编辑。"
-        )
-        player_box.Add(current_items_desc, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
-
-        def _build_current_items_box(label_text: str, item_kind: str) -> wx.StaticBoxSizer:
-            box = wx.StaticBoxSizer(wx.VERTICAL, structured_edit_panel, label_text)
-
-            listbox = wx.ListBox(structured_edit_panel, wx.ID_ANY, style=wx.LB_SINGLE)
-            listbox.SetMinSize(wx.Size(-1, 120))
-            listbox.Bind(
-                wx.EVT_LISTBOX,
-                lambda event, current_kind=item_kind: self.on_select_run_item(event, current_kind)
-            )
-            box.Add(listbox, 0, wx.EXPAND | wx.ALL, 6)
-
-            actions = wx.BoxSizer(wx.HORIZONTAL)
-
-            remove_selected_button = wx.Button(structured_edit_panel, wx.ID_ANY, "删除选中")
-            remove_selected_button.Bind(
-                wx.EVT_BUTTON,
-                lambda event, current_kind=item_kind: self.on_remove_selected_run_item(event, current_kind)
-            )
-            actions.Add(remove_selected_button, 0, wx.RIGHT, 8)
-
-            move_up_button = wx.Button(structured_edit_panel, wx.ID_ANY, "上移")
-            move_up_button.Bind(
-                wx.EVT_BUTTON,
-                lambda event, current_kind=item_kind: self.on_move_run_item_up(event, current_kind)
-            )
-            actions.Add(move_up_button, 0, wx.RIGHT, 8)
-
-            move_down_button = wx.Button(structured_edit_panel, wx.ID_ANY, "下移")
-            move_down_button.Bind(
-                wx.EVT_BUTTON,
-                lambda event, current_kind=item_kind: self.on_move_run_item_down(event, current_kind)
-            )
-            actions.Add(move_down_button, 0, wx.RIGHT, 8)
-
-            replace_button = wx.Button(structured_edit_panel, wx.ID_ANY, "用候选替换")
-            replace_button.Bind(
-                wx.EVT_BUTTON,
-                lambda event, current_kind=item_kind: self.on_replace_selected_run_item(event, current_kind)
-            )
-            actions.Add(replace_button, 0)
-
-            box.Add(actions, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 6)
-
-            setattr(self, f"run_{item_kind}_items_listbox", listbox)
-            setattr(self, f"run_{item_kind}_remove_selected_button", remove_selected_button)
-            setattr(self, f"run_{item_kind}_move_up_button", move_up_button)
-            setattr(self, f"run_{item_kind}_move_down_button", move_down_button)
-            setattr(self, f"run_{item_kind}_replace_button", replace_button)
-
-            return box
-
-        player_box.Add(_build_current_items_box("卡组当前列表", "deck"), 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
-        player_box.Add(_build_current_items_box("遗物当前列表", "relic"), 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
-        player_box.Add(_build_current_items_box("药水当前列表", "potion"), 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
-
-        localized_preview_desc = wx.StaticText(
-            structured_edit_panel,
-            wx.ID_ANY,
-            "中文名预览（仅展示，不会写回存档）"
-        )
-        player_box.Add(localized_preview_desc, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
-        
-        # Add search and filter controls
-        preview_filter_sizer = wx.BoxSizer(wx.HORIZONTAL)
-        preview_filter_sizer.Add(
-            wx.StaticText(structured_edit_panel, wx.ID_ANY, "搜索："),
-            0,
-            wx.ALIGN_CENTER_VERTICAL | wx.RIGHT,
-            6,
-        )
-
-        self.run_localized_search_ctrl = wx.TextCtrl(structured_edit_panel, wx.ID_ANY, "")
-        self.run_localized_search_ctrl.Bind(wx.EVT_TEXT, self.on_run_localized_filter_changed)
-        preview_filter_sizer.Add(self.run_localized_search_ctrl, 1, wx.RIGHT, 12)
-
-        preview_filter_sizer.Add(
-            wx.StaticText(structured_edit_panel, wx.ID_ANY, "筛选："),
-            0,
-            wx.ALIGN_CENTER_VERTICAL | wx.RIGHT,
-            6,
-        )
-        self.run_localized_filter_choice = wx.Choice(
-            structured_edit_panel,
-            wx.ID_ANY,
-            choices=["全部", "卡组", "遗物", "药水"],
-        )
-        self.run_localized_filter_choice.SetSelection(0)
-        self.run_localized_filter_choice.Bind(wx.EVT_CHOICE, self.on_run_localized_filter_changed)
-        preview_filter_sizer.Add(self.run_localized_filter_choice, 0)
-
-        player_box.Add(preview_filter_sizer, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
-        
-        self.run_localized_preview_ctrl = wx.TextCtrl(
-            structured_edit_panel,
-            wx.ID_ANY,
-            "",
-            style=wx.TE_MULTILINE | wx.HSCROLL | wx.TE_RICH2 | wx.TE_READONLY,
-        )
-        self.run_localized_preview_ctrl.SetFont(mono_font)
-        self.run_localized_preview_ctrl.SetMinSize(wx.Size(-1, 180))
-        player_box.Add(self.run_localized_preview_ctrl, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
-        
-        self.run_deck_enchantment_search_ctrl.Bind(wx.EVT_TEXT, self.on_run_deck_enchantment_search_changed)
-        self.run_deck_apply_upgrade_button.Bind(wx.EVT_BUTTON, self.on_apply_selected_deck_upgrade)
-        self.run_deck_clear_upgrade_button.Bind(wx.EVT_BUTTON, self.on_clear_selected_deck_upgrade)
-        self.run_deck_apply_enchantment_button.Bind(wx.EVT_BUTTON, self.on_apply_selected_deck_enchantment)
-        self.run_deck_clear_enchantment_button.Bind(wx.EVT_BUTTON, self.on_clear_selected_deck_enchantment)
-
-        structured_edit_sizer.Add(player_box, 0, wx.EXPAND | wx.ALL, 10)
+        progress_form_sizer.Add(wx.StaticText(structured_edit_panel, wx.ID_ANY, "当前分数："), 0, wx.ALIGN_CENTER_VERTICAL)
+        progress_form_sizer.Add(self.progress_current_score_ctrl, 1, wx.EXPAND)
+        progress_form_sizer.Add(wx.StaticText(structured_edit_panel, wx.ID_ANY, "总爬塔层数："), 0, wx.ALIGN_CENTER_VERTICAL)
+        progress_form_sizer.Add(self.progress_floors_climbed_ctrl, 1, wx.EXPAND)
+        progress_form_sizer.Add(wx.StaticText(structured_edit_panel, wx.ID_ANY, "总游玩时长："), 0, wx.ALIGN_CENTER_VERTICAL)
+        progress_form_sizer.Add(self.progress_total_playtime_ctrl, 1, wx.EXPAND)
+        progress_form_sizer.Add(wx.StaticText(structured_edit_panel, wx.ID_ANY, "总解锁数："), 0, wx.ALIGN_CENTER_VERTICAL)
+        progress_form_sizer.Add(self.progress_total_unlocks_ctrl, 1, wx.EXPAND)
+        progress_form_sizer.Add(wx.StaticText(structured_edit_panel, wx.ID_ANY, "待解锁角色："), 0, wx.ALIGN_CENTER_VERTICAL)
+        progress_form_sizer.Add(self.progress_pending_character_unlock_ctrl, 1, wx.EXPAND)
+        progress_form_sizer.Add(wx.StaticText(structured_edit_panel, wx.ID_ANY, "待解锁角色中文名："), 0, wx.ALIGN_CENTER_VERTICAL)
+        progress_form_sizer.Add(self.progress_pending_character_unlock_preview_ctrl, 1, wx.EXPAND)
+        progress_box.Add(progress_form_sizer, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
+        structured_edit_sizer.Add(progress_box, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
 
         prefs_box = wx.StaticBoxSizer(wx.VERTICAL, structured_edit_panel, "偏好设置编辑")
-        prefs_desc = wx.StaticText(
-            structured_edit_panel,
-            wx.ID_ANY,
-            "当前支持偏好设置的第一版结构化编辑。"
+        prefs_box.Add(
+            wx.StaticText(
+                structured_edit_panel,
+                wx.ID_ANY,
+                "用于编辑 prefs.save；未加载该类型文件时会自动禁用。",
+            ),
+            0,
+            wx.ALL,
+            8,
         )
-        prefs_box.Add(prefs_desc, 0, wx.ALL, 8)
 
         self.prefs_fast_mode_ctrl = wx.TextCtrl(structured_edit_panel, wx.ID_ANY, "")
         self.prefs_screenshake_ctrl = wx.SpinCtrl(
@@ -740,52 +754,68 @@ class StS2MainFrame(wx.Frame):
         self.prefs_text_effects_enabled_ctrl = wx.CheckBox(structured_edit_panel, wx.ID_ANY, "启用")
         self.prefs_upload_data_ctrl = wx.CheckBox(structured_edit_panel, wx.ID_ANY, "启用")
 
-        prefs_form_sizer = wx.FlexGridSizer(0, 2, 8, 8)
+        prefs_form_sizer = wx.FlexGridSizer(0, 4, 8, 12)
         prefs_form_sizer.AddGrowableCol(1, 1)
+        prefs_form_sizer.AddGrowableCol(3, 1)
 
         prefs_form_sizer.Add(wx.StaticText(structured_edit_panel, wx.ID_ANY, "fast_mode："), 0, wx.ALIGN_CENTER_VERTICAL)
         prefs_form_sizer.Add(self.prefs_fast_mode_ctrl, 1, wx.EXPAND)
-
         prefs_form_sizer.Add(wx.StaticText(structured_edit_panel, wx.ID_ANY, "screenshake："), 0, wx.ALIGN_CENTER_VERTICAL)
         prefs_form_sizer.Add(self.prefs_screenshake_ctrl, 1, wx.EXPAND)
-
         prefs_form_sizer.Add(wx.StaticText(structured_edit_panel, wx.ID_ANY, "long_press："), 0, wx.ALIGN_CENTER_VERTICAL)
         prefs_form_sizer.Add(self.prefs_long_press_ctrl, 1, wx.EXPAND)
-
         prefs_form_sizer.Add(wx.StaticText(structured_edit_panel, wx.ID_ANY, "mute_in_background："), 0, wx.ALIGN_CENTER_VERTICAL)
         prefs_form_sizer.Add(self.prefs_mute_in_background_ctrl, 1, wx.EXPAND)
-
         prefs_form_sizer.Add(wx.StaticText(structured_edit_panel, wx.ID_ANY, "show_card_indices："), 0, wx.ALIGN_CENTER_VERTICAL)
         prefs_form_sizer.Add(self.prefs_show_card_indices_ctrl, 1, wx.EXPAND)
-
         prefs_form_sizer.Add(wx.StaticText(structured_edit_panel, wx.ID_ANY, "show_run_timer："), 0, wx.ALIGN_CENTER_VERTICAL)
         prefs_form_sizer.Add(self.prefs_show_run_timer_ctrl, 1, wx.EXPAND)
-
         prefs_form_sizer.Add(wx.StaticText(structured_edit_panel, wx.ID_ANY, "text_effects_enabled："), 0, wx.ALIGN_CENTER_VERTICAL)
         prefs_form_sizer.Add(self.prefs_text_effects_enabled_ctrl, 1, wx.EXPAND)
-
         prefs_form_sizer.Add(wx.StaticText(structured_edit_panel, wx.ID_ANY, "upload_data："), 0, wx.ALIGN_CENTER_VERTICAL)
         prefs_form_sizer.Add(self.prefs_upload_data_ctrl, 1, wx.EXPAND)
+        prefs_box.Add(prefs_form_sizer, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
+        structured_edit_sizer.Add(prefs_box, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
 
-        prefs_box.Add(prefs_form_sizer, 0, wx.EXPAND | wx.ALL, 8)
-        structured_edit_sizer.Add(prefs_box, 0, wx.EXPAND | wx.ALL, 10)
-
-        # Apply button
+        bottom_actions = wx.BoxSizer(wx.HORIZONTAL)
+        bottom_actions.Add(
+            wx.StaticText(
+                structured_edit_panel,
+                wx.ID_ANY,
+                "说明：这里的“同步”只是把结构化编辑结果写入右侧 JSON 编辑器，真正落盘仍需点击窗口顶部“保存”。",
+            ),
+            1,
+            wx.ALIGN_CENTER_VERTICAL | wx.RIGHT,
+            12,
+        )
         self.apply_structured_button = wx.Button(
             structured_edit_panel,
             wx.ID_ANY,
-            "应用到当前 JSON"
+            "同步到 JSON（未保存）",
         )
         self.apply_structured_button.Bind(wx.EVT_BUTTON, self.on_apply_structured_edits)
-        structured_edit_sizer.Add(self.apply_structured_button, 0, wx.ALL | wx.ALIGN_CENTER, 10)
-        
+        bottom_actions.Add(self.apply_structured_button, 0)
+        structured_edit_sizer.Add(bottom_actions, 0, wx.EXPAND | wx.ALL, 10)
+
+        self.run_deck_enchantment_search_ctrl.Bind(wx.EVT_TEXT, self.on_run_deck_enchantment_search_changed)
+        self.run_deck_apply_upgrade_button.Bind(wx.EVT_BUTTON, self.on_apply_selected_deck_upgrade)
+        self.run_deck_clear_upgrade_button.Bind(wx.EVT_BUTTON, self.on_clear_selected_deck_upgrade)
+        self.run_deck_apply_enchantment_button.Bind(wx.EVT_BUTTON, self.on_apply_selected_deck_enchantment)
+        self.run_deck_clear_enchantment_button.Bind(wx.EVT_BUTTON, self.on_clear_selected_deck_enchantment)
+
         structured_edit_panel.SetSizer(structured_edit_sizer)
         structured_edit_panel.FitInside()
         structured_edit_panel.Layout()
         self.notebook.AddPage(structured_edit_panel, "结构化编辑")
-        self.notebook.Bind(wx.EVT_NOTEBOOK_PAGE_CHANGED, self.on_notebook_page_changed)
 
-        # Tab 3: JSON 编辑
+        self.structured_view = wx.TextCtrl(
+            self.notebook,
+            wx.ID_ANY,
+            style=wx.TE_MULTILINE | wx.HSCROLL | wx.TE_RICH2 | wx.TE_READONLY,
+        )
+        self.structured_view.SetFont(mono_font)
+        self.notebook.AddPage(self.structured_view, "结构化视图")
+
         self.editor = wx.TextCtrl(
             self.notebook,
             wx.ID_ANY,
@@ -793,6 +823,7 @@ class StS2MainFrame(wx.Frame):
         )
         self.editor.SetFont(mono_font)
         self.notebook.AddPage(self.editor, "JSON 编辑")
+        self.notebook.Bind(wx.EVT_NOTEBOOK_PAGE_CHANGED, self.on_notebook_page_changed)
 
         right_panel.Add(self.file_title, 0, wx.BOTTOM, 4)
         right_panel.Add(self.file_meta, 0, wx.BOTTOM, 4)
@@ -1118,6 +1149,8 @@ class StS2MainFrame(wx.Frame):
             "run_potion_ids_ctrl",
             "run_localized_search_ctrl",
             "run_localized_filter_choice",
+            "run_items_notebook",
+            "run_deck_editor_notebook",
             "run_deck_upgrade_level_ctrl",
             "run_deck_enchantment_search_ctrl",
             "run_deck_enchantment_choice",
@@ -1147,6 +1180,7 @@ class StS2MainFrame(wx.Frame):
                 f"run_{item_kind}_move_up_button",
                 f"run_{item_kind}_move_down_button",
                 f"run_{item_kind}_replace_button",
+                f"run_{item_kind}_clear_all_button",
             ):
                 ctrl = getattr(self, attr_name, None)
                 if ctrl is not None:
@@ -1894,6 +1928,7 @@ class StS2MainFrame(wx.Frame):
             self.editor.SetValue("")
             self._clear_run_player_editor()
             self._set_structured_editor_enabled(False)
+            self._update_all_run_items_notebook_page_labels()
             self.SetStatusText("未找到可编辑文件")
             self._queue_layout_refresh()
             return
@@ -2155,7 +2190,7 @@ class StS2MainFrame(wx.Frame):
                         self.run_player_choice.SetSelection(selected_player)
                         self._load_selected_run_player_fields()
 
-            self.notebook.SetSelection(2)
+            self.notebook.SetSelection(getattr(self, "json_editor_tab_index", 2))
             self.SetStatusText("已将结构化修改同步到当前 JSON（尚未保存到文件）")
 
         except Exception as exc:
@@ -2453,6 +2488,34 @@ class StS2MainFrame(wx.Frame):
     def _get_run_item_listbox(self, item_kind: str) -> wx.ListBox | None:
         return getattr(self, f"run_{item_kind}_items_listbox", None)
 
+    def _update_run_items_notebook_page_label(self, item_kind: str) -> None:
+        notebook = getattr(self, "run_items_notebook", None)
+        if notebook is None:
+            return
+
+        normalized_kind = self._normalize_run_item_kind(item_kind)
+        config = self._get_run_candidate_config(normalized_kind)
+        if not config:
+            return
+
+        page_index_map = {
+            "deck": 0,
+            "relic": 1,
+            "potion": 2,
+        }
+        page_index = page_index_map.get(normalized_kind)
+        if page_index is None or page_index >= notebook.GetPageCount():
+            return
+
+        count = 0
+        if self.current_info and self.current_info.kind in (SaveFileKind.RUN_HISTORY, SaveFileKind.CURRENT_RUN):
+            count = len(self._get_run_items(normalized_kind))
+        notebook.SetPageText(page_index, f"{config['display_name']}({count})")
+
+    def _update_all_run_items_notebook_page_labels(self) -> None:
+        for item_kind in ("deck", "relic", "potion"):
+            self._update_run_items_notebook_page_label(item_kind)
+
     def _read_run_item_ids_from_editor(self, item_kind: str) -> list[str]:
         normalized_kind = self._normalize_run_item_kind(item_kind)
         self._sync_run_items_from_editor_text(normalized_kind)
@@ -2473,20 +2536,24 @@ class StS2MainFrame(wx.Frame):
     def _update_run_item_listbox(self, item_kind: str) -> None:
         normalized_kind = self._normalize_run_item_kind(item_kind)
         listbox = self._get_run_item_listbox(normalized_kind)
-        if listbox is None:
-            return
 
         if not (self.current_info and self.current_info.kind in (SaveFileKind.RUN_HISTORY, SaveFileKind.CURRENT_RUN)):
-            listbox.Set([])
+            if listbox is not None:
+                listbox.Set([])
+            self._update_run_items_notebook_page_label(normalized_kind)
             return
 
-        current_selection = listbox.GetSelection()
         items = self._get_run_items(normalized_kind)
         labels = [format_run_item_label(item, item_kind=normalized_kind) for item in items]
-        listbox.Set(labels)
 
-        if labels and current_selection != wx.NOT_FOUND:
-            listbox.SetSelection(min(current_selection, len(labels) - 1))
+        if listbox is not None:
+            current_selection = listbox.GetSelection()
+            listbox.Set(labels)
+
+            if labels and current_selection != wx.NOT_FOUND:
+                listbox.SetSelection(min(current_selection, len(labels) - 1))
+
+        self._update_run_items_notebook_page_label(normalized_kind)
 
     def _update_all_run_item_listboxes(self) -> None:
         for item_kind in ("deck", "relic", "potion"):
@@ -2609,6 +2676,39 @@ class StS2MainFrame(wx.Frame):
 
     def on_replace_selected_run_item(self, event: wx.CommandEvent, item_kind: str) -> None:
         self._replace_selected_run_item_in_editor(item_kind)
+
+    def _clear_all_run_items_in_editor(self, item_kind: str) -> None:
+        normalized_kind = self._normalize_run_item_kind(item_kind)
+        config = self._get_run_candidate_config(normalized_kind)
+        if not config:
+            return
+
+        items = list(self._get_run_items(normalized_kind))
+        if not items:
+            self.SetStatusText(f"当前{config['display_name']}列表已为空")
+            return
+
+        dialog = wx.MessageDialog(
+            self,
+            f"确定要清空当前玩家的全部{config['display_name']}吗？\n\n此操作只会修改当前结构化编辑区，仍需你后续同步并保存。",
+            f"清空{config['display_name']}列表",
+            wx.YES_NO | wx.NO_DEFAULT | wx.ICON_WARNING,
+        )
+        try:
+            result = dialog.ShowModal()
+        finally:
+            dialog.Destroy()
+
+        if result != wx.ID_YES:
+            self.SetStatusText(f"已取消清空{config['display_name']}列表")
+            return
+
+        self._set_run_items(normalized_kind, [])
+        self._update_run_localized_preview()
+        self.SetStatusText(f"已清空当前玩家的全部{config['display_name']}")
+
+    def on_clear_all_run_items(self, event: wx.CommandEvent, item_kind: str) -> None:
+        self._clear_all_run_items_in_editor(item_kind)
 
     def on_apply_selected_deck_upgrade(self, event: wx.CommandEvent | None) -> None:
         selected_index = self._get_selected_run_item_index("deck")
