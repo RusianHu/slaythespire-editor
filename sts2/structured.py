@@ -1325,6 +1325,11 @@ def extract_run_player_fields(data: Any, player_index: int) -> dict[str, Any]:
     if not character:
         character = _as_str(player.get("character_id"))
     max_potion_slot_count = _as_int(player.get("max_potion_slot_count"))
+    
+    # 提取金币与生命值字段
+    gold = _as_int(player.get("gold"))
+    current_hp = _as_int(player.get("current_hp"))
+    max_hp = _as_int(player.get("max_hp"))
 
     deck = player.get("deck", [])
     relics = player.get("relics", [])
@@ -1337,6 +1342,9 @@ def extract_run_player_fields(data: Any, player_index: int) -> dict[str, Any]:
     return {
         "character": character,
         "max_potion_slot_count": max_potion_slot_count,
+        "gold": gold,
+        "current_hp": current_hp,
+        "max_hp": max_hp,
         "deck_items": deck_items,
         "relic_items": relic_items,
         "potion_items": potion_items,
@@ -1351,7 +1359,10 @@ def apply_run_player_fields(
     *,
     player_index: int,
     character: str,
-    max_potion_slot_count: int,
+    max_potion_slot_count: int | None = None,
+    gold: int | None = None,
+    current_hp: int | None = None,
+    max_hp: int | None = None,
     deck_ids: list[str] | None = None,
     relic_ids: list[str] | None = None,
     potion_ids: list[str] | None = None,
@@ -1397,7 +1408,18 @@ def apply_run_player_fields(
     else:
         updated_player["character"] = character
 
-    updated_player["max_potion_slot_count"] = max_potion_slot_count
+    # 按可选值判断写回
+    if max_potion_slot_count is not None:
+        updated_player["max_potion_slot_count"] = max_potion_slot_count
+    
+    if gold is not None:
+        updated_player["gold"] = gold
+    
+    if current_hp is not None:
+        updated_player["current_hp"] = current_hp
+    
+    if max_hp is not None:
+        updated_player["max_hp"] = max_hp
 
     normalized_deck_ids = [item for item in (deck_ids or []) if item]
     normalized_relic_ids = [item for item in (relic_ids or []) if item]

@@ -2,11 +2,31 @@
 ; SEE THE DOCUMENTATION FOR DETAILS ON CREATING INNO SETUP SCRIPT FILES!
 
 #define MyAppName "杀戮尖塔 2 存档修改器"
-#define MyAppVersion "0.2"
 #define MyAppURL "https://github.com/RusianHu/slaythespire-editor"
-#define MyAppExeName "slaythespire-editor-sts2.exe"
-#define MyAppCliExeName "slaythespire-editor-sts2-cli.exe"
-#define MyDistFile "dist\\slaythespire-editor-sts2.exe"
+#define MyDefaultAppVersion "0.0.0"
+#define MyDefaultAppExeName "slaythespire-editor-sts2.exe"
+#define MyDefaultDistFile "dist\\slaythespire-editor-sts2.exe"
+#define MyDefaultOutputBaseFilename "slaythespire-editor-sts2-setup"
+
+#ifexist ".build\\installer_version.iss"
+#include ".build\\installer_version.iss"
+#endif
+
+#ifndef MyAppVersion
+#define MyAppVersion MyDefaultAppVersion
+#endif
+
+#ifndef MyAppExeName
+#define MyAppExeName MyDefaultAppExeName
+#endif
+
+#ifndef MyDistFile
+#define MyDistFile MyDefaultDistFile
+#endif
+
+#ifndef MyOutputBaseFilename
+#define MyOutputBaseFilename MyDefaultOutputBaseFilename
+#endif
 
 [Setup]
 AppId={{D4A4C7C5-55D1-4E9B-BD0E-2D86D9B5C4A7}
@@ -22,7 +42,7 @@ InfoBeforeFile={#SourcePath}\preinstall.txt
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
 OutputDir={#SourcePath}\dist_installer
-OutputBaseFilename=slaythespire-editor-sts2-setup
+OutputBaseFilename={#MyOutputBaseFilename}
 Compression=lzma
 SolidCompression=yes
 WizardStyle=modern

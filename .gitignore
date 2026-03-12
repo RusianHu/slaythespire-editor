@@ -6,5 +6,6 @@
 AGENTS.md
 
 /build
+/.build
 /dist
 /dist_installer

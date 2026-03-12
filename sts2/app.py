@@ -511,56 +511,53 @@ class StS2MainFrame(wx.Frame):
         self.run_items_notebook.AddPage(_build_quick_item_page("药水", "potion"), "药水(0)")
         quick_items_box.Add(self.run_items_notebook, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
 
-        localized_preview_box = wx.StaticBoxSizer(wx.VERTICAL, structured_edit_panel, "中文名总览（仅展示）")
-        localized_preview_box.Add(
+        structured_edit_sizer.Add(quick_items_box, 0, wx.EXPAND | wx.ALL, 10)
+
+        player_basics_box = wx.StaticBoxSizer(wx.VERTICAL, structured_edit_panel, "玩家基础字段（金币 / 生命值）")
+        player_basics_box.Add(
             wx.StaticText(
                 structured_edit_panel,
                 wx.ID_ANY,
-                "用于快速确认当前卡组、遗物、药水是否正确；不会写回存档。",
+                "用于编辑当前玩家的基础数值；会随同结构化同步写入 JSON。",
             ),
             0,
-            wx.LEFT | wx.RIGHT | wx.TOP | wx.BOTTOM,
-            6,
+            wx.ALL,
+            8,
         )
 
-        preview_filter_sizer = wx.BoxSizer(wx.HORIZONTAL)
-        preview_filter_sizer.Add(
-            wx.StaticText(structured_edit_panel, wx.ID_ANY, "搜索："),
-            0,
-            wx.ALIGN_CENTER_VERTICAL | wx.RIGHT,
-            6,
-        )
-        self.run_localized_search_ctrl = wx.TextCtrl(structured_edit_panel, wx.ID_ANY, "")
-        self.run_localized_search_ctrl.Bind(wx.EVT_TEXT, self.on_run_localized_filter_changed)
-        preview_filter_sizer.Add(self.run_localized_search_ctrl, 1, wx.RIGHT, 12)
-        preview_filter_sizer.Add(
-            wx.StaticText(structured_edit_panel, wx.ID_ANY, "筛选："),
-            0,
-            wx.ALIGN_CENTER_VERTICAL | wx.RIGHT,
-            6,
-        )
-        self.run_localized_filter_choice = wx.Choice(
+        self.run_gold_ctrl = wx.SpinCtrl(
             structured_edit_panel,
             wx.ID_ANY,
-            choices=["全部", "卡组", "遗物", "药水"],
+            min=0,
+            max=999999999,
+            initial=0,
         )
-        self.run_localized_filter_choice.SetSelection(0)
-        self.run_localized_filter_choice.Bind(wx.EVT_CHOICE, self.on_run_localized_filter_changed)
-        preview_filter_sizer.Add(self.run_localized_filter_choice, 0)
-        localized_preview_box.Add(preview_filter_sizer, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 6)
-
-        self.run_localized_preview_ctrl = wx.TextCtrl(
+        self.run_current_hp_ctrl = wx.SpinCtrl(
             structured_edit_panel,
             wx.ID_ANY,
-            "",
-            style=wx.TE_MULTILINE | wx.HSCROLL | wx.TE_RICH2 | wx.TE_READONLY,
+            min=0,
+            max=999999,
+            initial=0,
         )
-        self.run_localized_preview_ctrl.SetFont(mono_font)
-        self.run_localized_preview_ctrl.SetMinSize(wx.Size(-1, 180))
-        localized_preview_box.Add(self.run_localized_preview_ctrl, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 6)
-        quick_items_box.Add(localized_preview_box, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
+        self.run_max_hp_ctrl = wx.SpinCtrl(
+            structured_edit_panel,
+            wx.ID_ANY,
+            min=0,
+            max=999999,
+            initial=0,
+        )
 
-        structured_edit_sizer.Add(quick_items_box, 0, wx.EXPAND | wx.ALL, 10)
+        player_basics_grid = wx.FlexGridSizer(0, 4, 8, 12)
+        player_basics_grid.AddGrowableCol(1, 1)
+        player_basics_grid.AddGrowableCol(3, 1)
+        player_basics_grid.Add(wx.StaticText(structured_edit_panel, wx.ID_ANY, "金币："), 0, wx.ALIGN_CENTER_VERTICAL)
+        player_basics_grid.Add(self.run_gold_ctrl, 1, wx.EXPAND)
+        player_basics_grid.Add(wx.StaticText(structured_edit_panel, wx.ID_ANY, "当前生命："), 0, wx.ALIGN_CENTER_VERTICAL)
+        player_basics_grid.Add(self.run_current_hp_ctrl, 1, wx.EXPAND)
+        player_basics_grid.Add(wx.StaticText(structured_edit_panel, wx.ID_ANY, "最大生命："), 0, wx.ALIGN_CENTER_VERTICAL)
+        player_basics_grid.Add(self.run_max_hp_ctrl, 1, wx.EXPAND)
+        player_basics_box.Add(player_basics_grid, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
+        structured_edit_sizer.Add(player_basics_box, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
 
         run_basics_box = wx.StaticBoxSizer(wx.VERTICAL, structured_edit_panel, "战局基础字段")
         run_basics_box.Add(
@@ -1144,6 +1141,9 @@ class StS2MainFrame(wx.Frame):
             "run_player_choice",
             "run_character_ctrl",
             "run_max_potion_slots_ctrl",
+            "run_gold_ctrl",
+            "run_current_hp_ctrl",
+            "run_max_hp_ctrl",
             "run_deck_ids_ctrl",
             "run_relic_ids_ctrl",
             "run_potion_ids_ctrl",
@@ -1234,6 +1234,12 @@ class StS2MainFrame(wx.Frame):
             self.run_character_ctrl.SetValue("")
         if hasattr(self, 'run_max_potion_slots_ctrl'):
             self.run_max_potion_slots_ctrl.SetValue(0)
+        if hasattr(self, 'run_gold_ctrl'):
+            self.run_gold_ctrl.SetValue(0)
+        if hasattr(self, 'run_current_hp_ctrl'):
+            self.run_current_hp_ctrl.SetValue(0)
+        if hasattr(self, 'run_max_hp_ctrl'):
+            self.run_max_hp_ctrl.SetValue(0)
         if hasattr(self, 'run_deck_ids_ctrl'):
             self.run_deck_ids_ctrl.ChangeValue("")
         if hasattr(self, 'run_relic_ids_ctrl'):
@@ -1568,13 +1574,12 @@ class StS2MainFrame(wx.Frame):
         event.Skip()
 
     def _update_run_localized_preview(self) -> None:
-        """Update run localized preview controls."""
-        if not hasattr(self, 'run_character_preview_ctrl') or not hasattr(self, 'run_localized_preview_ctrl'):
+        """Update run localized preview related controls."""
+        if not hasattr(self, 'run_character_preview_ctrl'):
             return
 
         if not (self.current_info and self.current_info.kind in (SaveFileKind.RUN_HISTORY, SaveFileKind.CURRENT_RUN)):
             self.run_character_preview_ctrl.SetValue("")
-            self.run_localized_preview_ctrl.SetValue("")
             self._update_all_run_item_listboxes()
             self._update_selected_deck_meta_controls()
             return
@@ -1585,47 +1590,6 @@ class StS2MainFrame(wx.Frame):
         character_preview = format_localized_id_text(character, category="characters")
         self.run_character_preview_ctrl.SetValue(character_preview)
 
-        deck_items = self._get_run_items("deck")
-        relic_items = self._get_run_items("relic")
-        potion_items = self._get_run_items("potion")
-
-        search_query = self.run_localized_search_ctrl.GetValue().strip() if hasattr(self, 'run_localized_search_ctrl') else ""
-        selected_filter = "全部"
-        if hasattr(self, 'run_localized_filter_choice'):
-            selected_filter = self.run_localized_filter_choice.GetStringSelection() or "全部"
-
-        empty_text = "无匹配项" if search_query else "无"
-        sections: list[str] = []
-
-        if selected_filter in ("全部", "卡组"):
-            deck_preview = build_run_items_preview_text(
-                deck_items,
-                item_kind="deck",
-                search_query=search_query,
-                empty_text=empty_text,
-            )
-            sections.append(f"【卡组】\n{deck_preview}")
-
-        if selected_filter in ("全部", "遗物"):
-            relic_preview = build_run_items_preview_text(
-                relic_items,
-                item_kind="relics",
-                search_query=search_query,
-                empty_text=empty_text,
-            )
-            sections.append(f"【遗物】\n{relic_preview}")
-
-        if selected_filter in ("全部", "药水"):
-            potion_preview = build_run_items_preview_text(
-                potion_items,
-                item_kind="potions",
-                search_query=search_query,
-                empty_text=empty_text,
-            )
-            sections.append(f"【药水】\n{potion_preview}")
-
-        preview_text = "\n\n".join(sections) if sections else empty_text
-        self.run_localized_preview_ctrl.SetValue(preview_text)
         self._update_all_run_item_listboxes()
         self._update_selected_deck_meta_controls()
 
@@ -1695,6 +1659,12 @@ class StS2MainFrame(wx.Frame):
                 self.run_character_ctrl.SetValue("")
             if hasattr(self, 'run_max_potion_slots_ctrl'):
                 self.run_max_potion_slots_ctrl.SetValue(0)
+            if hasattr(self, 'run_gold_ctrl'):
+                self.run_gold_ctrl.SetValue(0)
+            if hasattr(self, 'run_current_hp_ctrl'):
+                self.run_current_hp_ctrl.SetValue(0)
+            if hasattr(self, 'run_max_hp_ctrl'):
+                self.run_max_hp_ctrl.SetValue(0)
             self.run_deck_items = []
             self.run_relic_items = []
             self.run_potion_items = []
@@ -1718,6 +1688,24 @@ class StS2MainFrame(wx.Frame):
                     max_potion_slots = 0
                 self.run_max_potion_slots_ctrl.SetValue(max_potion_slots)
 
+            if hasattr(self, 'run_gold_ctrl'):
+                gold_value = fields.get("gold", 0)
+                if not isinstance(gold_value, int):
+                    gold_value = 0
+                self.run_gold_ctrl.SetValue(gold_value)
+
+            if hasattr(self, 'run_current_hp_ctrl'):
+                current_hp_value = fields.get("current_hp", 0)
+                if not isinstance(current_hp_value, int):
+                    current_hp_value = 0
+                self.run_current_hp_ctrl.SetValue(current_hp_value)
+
+            if hasattr(self, 'run_max_hp_ctrl'):
+                max_hp_value = fields.get("max_hp", 0)
+                if not isinstance(max_hp_value, int):
+                    max_hp_value = 0
+                self.run_max_hp_ctrl.SetValue(max_hp_value)
+
             self.run_deck_items = normalize_run_item_list(fields.get("deck_items", []), item_kind="deck")
             self.run_relic_items = normalize_run_item_list(fields.get("relic_items", []), item_kind="relics")
             self.run_potion_items = normalize_run_item_list(fields.get("potion_items", []), item_kind="potions")
@@ -1736,6 +1724,12 @@ class StS2MainFrame(wx.Frame):
                 self.run_character_ctrl.SetValue("")
             if hasattr(self, 'run_max_potion_slots_ctrl'):
                 self.run_max_potion_slots_ctrl.SetValue(0)
+            if hasattr(self, 'run_gold_ctrl'):
+                self.run_gold_ctrl.SetValue(0)
+            if hasattr(self, 'run_current_hp_ctrl'):
+                self.run_current_hp_ctrl.SetValue(0)
+            if hasattr(self, 'run_max_hp_ctrl'):
+                self.run_max_hp_ctrl.SetValue(0)
             if hasattr(self, 'run_deck_ids_ctrl'):
                 self.run_deck_ids_ctrl.SetValue("")
             if hasattr(self, 'run_relic_ids_ctrl'):
@@ -2003,12 +1997,18 @@ class StS2MainFrame(wx.Frame):
                 self._sync_all_run_items_from_editor_text()
                 character = self.run_character_ctrl.GetValue().strip()
                 max_potion_slot_count = self._read_spin_ctrl_int(self.run_max_potion_slots_ctrl, 0)
+                gold = self._read_spin_ctrl_int(self.run_gold_ctrl, 0)
+                current_hp = self._read_spin_ctrl_int(self.run_current_hp_ctrl, 0)
+                max_hp = self._read_spin_ctrl_int(self.run_max_hp_ctrl, 0)
 
                 updated_data = apply_run_player_fields(
                     updated_data,
                     player_index=selected_player,
                     character=character,
                     max_potion_slot_count=max_potion_slot_count,
+                    gold=gold,
+                    current_hp=current_hp,
+                    max_hp=max_hp,
                     deck_items=self.run_deck_items,
                     relic_items=self.run_relic_items,
                     potion_items=self.run_potion_items,
