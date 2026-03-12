@@ -12,6 +12,8 @@
 
 <img width="1173" height="872" alt="image" src="https://github.com/user-attachments/assets/e4a15424-4361-415e-95e8-ef71e8de4002" />
 
+<img width="1922" height="1112" alt="image" src="https://github.com/user-attachments/assets/9b35204e-ca12-45c6-8d81-ba05879ba0a9" />
+
 ## 安装
 
 
